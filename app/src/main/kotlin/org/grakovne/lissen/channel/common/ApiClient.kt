@@ -1,0 +1,31 @@
+package org.grakovne.lissen.channel.common
+
+import com.squareup.moshi.Moshi
+import org.grakovne.lissen.lib.domain.fixUriScheme
+import org.grakovne.lissen.persistence.preferences.LissenSharedPreferences
+import retrofit2.Retrofit
+import retrofit2.converter.moshi.MoshiConverterFactory
+
+class ApiClient(
+  host: String,
+  preferences: LissenSharedPreferences,
+) {
+  private val httpClient = createOkHttpClient(preferences = preferences)
+
+  val retrofit: Retrofit? =
+    runCatching {
+      Retrofit
+        .Builder()
+        .baseUrl(host.fixUriScheme())
+        .client(httpClient)
+        .addConverterFactory(MoshiConverterFactory.create(moshi))
+        .build()
+    }.getOrNull()
+
+  companion object {
+    private val moshi: Moshi =
+      Moshi
+        .Builder()
+        .build()
+  }
+}
