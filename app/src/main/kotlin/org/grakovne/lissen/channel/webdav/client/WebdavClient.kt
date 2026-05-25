@@ -50,34 +50,51 @@ class WebdavClient
       rootPath: String,
       username: String,
       password: String,
-    ): OperationResult<Unit> =
-      listResources(
+    ): OperationResult<Unit> {
+      val override =
+        AuthOverride(
+          token = password,
+          username = username,
+          webdavRoot = rootPath,
+        )
+      return listResourcesInternal(
         host = host,
         rootPath = rootPath,
-        username = username,
-        password = password,
         relativePath = "",
+        depth = 1,
+        authOverride = override,
       ).foldAsync(
         onSuccess = { OperationResult.Success(Unit) },
         onFailure = { OperationResult.Error(it.code) },
       )
+    }
 
     suspend fun listResources(
-      host: String? = preferences.getHost(),
-      rootPath: String? = preferences.getWebdavRoot() ?: "/",
-      username: String? = preferences.getUsername(),
-      password: String? = preferences.getToken(),
       relativePath: String,
       depth: Int = 1,
     ): OperationResult<List<WebdavResource>> =
+      listResourcesInternal(
+        host = preferences.getHost(),
+        rootPath = preferences.getWebdavRoot() ?: "/",
+        relativePath = relativePath,
+        depth = depth,
+        authOverride = null,
+      )
+
+    private suspend fun listResourcesInternal(
+      host: String?,
+      rootPath: String,
+      relativePath: String,
+      depth: Int,
+      authOverride: AuthOverride?,
+    ): OperationResult<List<WebdavResource>> =
       withContext(Dispatchers.IO) {
         val safeHost = host ?: return@withContext OperationResult.Error(OperationError.MissingCredentialsHost)
-        val safeRootPath = rootPath ?: "/"
 
         val requestUri =
           resolveUri(
             host = safeHost,
-            rootPath = safeRootPath,
+            rootPath = rootPath,
             relativePath = relativePath,
           ) ?: return@withContext OperationResult.Error(OperationError.InvalidCredentialsHost)
 
@@ -89,26 +106,10 @@ class WebdavClient
             .header("Content-Type", "application/xml")
             .method(
               "PROPFIND",
-              """
-              <?xml version="1.0" encoding="utf-8" ?>
-              <d:propfind xmlns:d="DAV:">
-                <d:prop>
-                  <d:resourcetype />
-                  <d:getlastmodified />
-                  <d:getetag />
-                  <d:getcontenttype />
-                  <d:getcontentlength />
-                </d:prop>
-              </d:propfind>
-              """.trimIndent().toRequestBody("application/xml".toMediaType()),
+              PROPFIND_REQUEST_BODY.toRequestBody("application/xml".toMediaType()),
             ).build()
 
-        executeRequest(
-          request = request,
-          username = username,
-          password = password,
-          rootPath = safeRootPath,
-        ).foldAsync(
+        executeRequest(request, authOverride).foldAsync(
           onSuccess = { response ->
             response.use {
               if (it.code !in successCodes) {
@@ -123,7 +124,7 @@ class WebdavClient
               val rootAbsolutePath =
                 resolveUri(
                   host = safeHost,
-                  rootPath = safeRootPath,
+                  rootPath = rootPath,
                   relativePath = "",
                 )?.path.orEmpty()
               val resources =
@@ -159,17 +160,13 @@ class WebdavClient
       relativePath: String,
       knownEtag: String?,
       knownLastModified: String?,
-      host: String? = preferences.getHost(),
-      rootPath: String? = preferences.getWebdavRoot() ?: "/",
-      username: String? = preferences.getUsername(),
-      password: String? = preferences.getToken(),
     ): OperationResult<ConditionalTextResponse> =
       withContext(Dispatchers.IO) {
-        val safeHost = host ?: return@withContext OperationResult.Error(OperationError.MissingCredentialsHost)
-        val safeRootPath = rootPath ?: "/"
+        val safeHost = preferences.getHost() ?: return@withContext OperationResult.Error(OperationError.MissingCredentialsHost)
+        val rootPath = preferences.getWebdavRoot() ?: "/"
 
         val uri =
-          resolveUri(host = safeHost, rootPath = safeRootPath, relativePath = relativePath)
+          resolveUri(host = safeHost, rootPath = rootPath, relativePath = relativePath)
             ?: return@withContext OperationResult.Error(OperationError.InvalidCredentialsHost)
 
         val request =
@@ -182,7 +179,7 @@ class WebdavClient
             }.get()
             .build()
 
-        executeRequest(request, username, password, safeRootPath).foldAsync(
+        executeRequest(request, authOverride = null).foldAsync(
           onSuccess = { response ->
             response.use {
               when (it.code) {
@@ -229,19 +226,13 @@ class WebdavClient
         )
       }
 
-    suspend fun readText(
-      relativePath: String,
-      host: String? = preferences.getHost(),
-      rootPath: String? = preferences.getWebdavRoot() ?: "/",
-      username: String? = preferences.getUsername(),
-      password: String? = preferences.getToken(),
-    ): OperationResult<String> =
+    suspend fun readText(relativePath: String): OperationResult<String> =
       withContext(Dispatchers.IO) {
-        val safeHost = host ?: return@withContext OperationResult.Error(OperationError.MissingCredentialsHost)
-        val safeRootPath = rootPath ?: "/"
+        val safeHost = preferences.getHost() ?: return@withContext OperationResult.Error(OperationError.MissingCredentialsHost)
+        val rootPath = preferences.getWebdavRoot() ?: "/"
 
         val uri =
-          resolveUri(host = safeHost, rootPath = safeRootPath, relativePath = relativePath)
+          resolveUri(host = safeHost, rootPath = rootPath, relativePath = relativePath)
             ?: return@withContext OperationResult.Error(OperationError.InvalidCredentialsHost)
 
         val request =
@@ -251,7 +242,7 @@ class WebdavClient
             .get()
             .build()
 
-        executeRequest(request, username, password, safeRootPath).foldAsync(
+        executeRequest(request, authOverride = null).foldAsync(
           onSuccess = { response ->
             response.use {
               if (it.code !in successCodes) {
@@ -267,17 +258,13 @@ class WebdavClient
     suspend fun putTextIfAbsent(
       relativePath: String,
       content: String,
-      host: String? = preferences.getHost(),
-      rootPath: String? = preferences.getWebdavRoot() ?: "/",
-      username: String? = preferences.getUsername(),
-      password: String? = preferences.getToken(),
     ): OperationResult<Unit> =
       withContext(Dispatchers.IO) {
-        val safeHost = host ?: return@withContext OperationResult.Error(OperationError.MissingCredentialsHost)
-        val safeRootPath = rootPath ?: "/"
+        val safeHost = preferences.getHost() ?: return@withContext OperationResult.Error(OperationError.MissingCredentialsHost)
+        val rootPath = preferences.getWebdavRoot() ?: "/"
 
         val uri =
-          resolveUri(host = safeHost, rootPath = safeRootPath, relativePath = relativePath)
+          resolveUri(host = safeHost, rootPath = rootPath, relativePath = relativePath)
             ?: return@withContext OperationResult.Error(OperationError.InvalidCredentialsHost)
 
         val request =
@@ -288,7 +275,7 @@ class WebdavClient
             .put(content.toRequestBody("application/json".toMediaType()))
             .build()
 
-        executeRequest(request, username, password, safeRootPath).foldAsync(
+        executeRequest(request, authOverride = null).foldAsync(
           onSuccess = { response ->
             response.use {
               when (it.code) {
@@ -306,17 +293,13 @@ class WebdavClient
       content: String,
       knownEtag: String? = null,
       knownLastModified: String? = null,
-      host: String? = preferences.getHost(),
-      rootPath: String? = preferences.getWebdavRoot() ?: "/",
-      username: String? = preferences.getUsername(),
-      password: String? = preferences.getToken(),
     ): OperationResult<PutTextResponse> =
       withContext(Dispatchers.IO) {
-        val safeHost = host ?: return@withContext OperationResult.Error(OperationError.MissingCredentialsHost)
-        val safeRootPath = rootPath ?: "/"
+        val safeHost = preferences.getHost() ?: return@withContext OperationResult.Error(OperationError.MissingCredentialsHost)
+        val rootPath = preferences.getWebdavRoot() ?: "/"
 
         val uri =
-          resolveUri(host = safeHost, rootPath = safeRootPath, relativePath = relativePath)
+          resolveUri(host = safeHost, rootPath = rootPath, relativePath = relativePath)
             ?: return@withContext OperationResult.Error(OperationError.InvalidCredentialsHost)
         val conditionHeaders =
           buildOverwriteConditionHeaders(
@@ -334,7 +317,7 @@ class WebdavClient
             }.put(content.toRequestBody("application/json".toMediaType()))
             .build()
 
-        executeRequest(request, username, password, safeRootPath).foldAsync(
+        executeRequest(request, authOverride = null).foldAsync(
           onSuccess = { response ->
             response.use {
               if (!isSuccessfulPutTextStatusCode(it.code)) {
@@ -353,19 +336,13 @@ class WebdavClient
         )
       }
 
-    suspend fun head(
-      relativePath: String,
-      host: String? = preferences.getHost(),
-      rootPath: String? = preferences.getWebdavRoot() ?: "/",
-      username: String? = preferences.getUsername(),
-      password: String? = preferences.getToken(),
-    ): OperationResult<Map<String, String>> =
+    suspend fun head(relativePath: String): OperationResult<Map<String, String>> =
       withContext(Dispatchers.IO) {
-        val safeHost = host ?: return@withContext OperationResult.Error(OperationError.MissingCredentialsHost)
-        val safeRootPath = rootPath ?: "/"
+        val safeHost = preferences.getHost() ?: return@withContext OperationResult.Error(OperationError.MissingCredentialsHost)
+        val rootPath = preferences.getWebdavRoot() ?: "/"
 
         val uri =
-          resolveUri(host = safeHost, rootPath = safeRootPath, relativePath = relativePath)
+          resolveUri(host = safeHost, rootPath = rootPath, relativePath = relativePath)
             ?: return@withContext OperationResult.Error(OperationError.InvalidCredentialsHost)
 
         val request =
@@ -375,7 +352,7 @@ class WebdavClient
             .head()
             .build()
 
-        executeRequest(request, username, password, safeRootPath).foldAsync(
+        executeRequest(request, authOverride = null).foldAsync(
           onSuccess = { response ->
             response.use {
               if (it.code !in successCodes) {
@@ -391,19 +368,13 @@ class WebdavClient
         )
       }
 
-    suspend fun fetchBinary(
-      relativePath: String,
-      host: String? = preferences.getHost(),
-      rootPath: String? = preferences.getWebdavRoot() ?: "/",
-      username: String? = preferences.getUsername(),
-      password: String? = preferences.getToken(),
-    ): OperationResult<Buffer> =
+    suspend fun fetchBinary(relativePath: String): OperationResult<Buffer> =
       withContext(Dispatchers.IO) {
-        val safeHost = host ?: return@withContext OperationResult.Error(OperationError.MissingCredentialsHost)
-        val safeRootPath = rootPath ?: "/"
+        val safeHost = preferences.getHost() ?: return@withContext OperationResult.Error(OperationError.MissingCredentialsHost)
+        val rootPath = preferences.getWebdavRoot() ?: "/"
 
         val uri =
-          resolveUri(host = safeHost, rootPath = safeRootPath, relativePath = relativePath)
+          resolveUri(host = safeHost, rootPath = rootPath, relativePath = relativePath)
             ?: return@withContext OperationResult.Error(OperationError.InvalidCredentialsHost)
 
         val request =
@@ -413,7 +384,7 @@ class WebdavClient
             .get()
             .build()
 
-        executeRequest(request, username, password, safeRootPath).foldAsync(
+        executeRequest(request, authOverride = null).foldAsync(
           onSuccess = { response ->
             response.use {
               if (it.code !in successCodes) {
@@ -468,22 +439,10 @@ class WebdavClient
 
     private fun executeRequest(
       request: Request,
-      username: String?,
-      password: String?,
-      rootPath: String?,
+      authOverride: AuthOverride?,
     ): OperationResult<okhttp3.Response> =
       runCatching {
-        val client =
-          createOkHttpClient(
-            preferences = preferences,
-            authOverride =
-              AuthOverride(
-                token = password,
-                username = username,
-                webdavRoot = rootPath,
-              ),
-          )
-
+        val client = createOkHttpClient(preferences = preferences, authOverride = authOverride)
         client.newCall(request).execute()
       }.fold(
         onSuccess = { OperationResult.Success(it) },
@@ -520,6 +479,20 @@ class WebdavClient
 
     companion object {
       private val successCodes = setOf(200, 201, 204, 207)
+
+      private val PROPFIND_REQUEST_BODY =
+        """
+        <?xml version="1.0" encoding="utf-8" ?>
+        <d:propfind xmlns:d="DAV:">
+          <d:prop>
+            <d:resourcetype />
+            <d:getlastmodified />
+            <d:getetag />
+            <d:getcontenttype />
+            <d:getcontentlength />
+          </d:prop>
+        </d:propfind>
+        """.trimIndent()
     }
   }
 

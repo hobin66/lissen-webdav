@@ -2,6 +2,10 @@ package org.grakovne.lissen.channel.webdav.cache
 
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.grakovne.lissen.channel.webdav.WebdavPathCodec
 import org.grakovne.lissen.common.moshi
 import timber.log.Timber
@@ -22,54 +26,87 @@ class WebdavPersistentCache
     private val detailsFolder: File by lazy { rootFolder.resolve(DETAILS_FOLDER).also { it.mkdirs() } }
     private val indexFile: File by lazy { rootFolder.resolve(INDEX_FILE_NAME) }
 
-    @Synchronized
-    fun readBookIndex(): List<WebdavBookIndexEntry> {
+    private val indexMutex = Mutex()
+    private val detailsMutex = Mutex()
+
+    @Volatile
+    private var cachedIndex: List<WebdavBookIndexEntry>? = null
+
+    suspend fun readBookIndex(): List<WebdavBookIndexEntry> {
+      cachedIndex?.let { return it }
+      return withContext(Dispatchers.IO) {
+        indexMutex.withLock {
+          cachedIndex?.let { return@withLock it }
+          val loaded = loadBookIndexFromDisk()
+          cachedIndex = loaded
+          loaded
+        }
+      }
+    }
+
+    suspend fun saveBookIndex(entries: List<WebdavBookIndexEntry>) {
+      val snapshot = entries.toList()
+      cachedIndex = snapshot
+      withContext(Dispatchers.IO) {
+        indexMutex.withLock {
+          runCatching {
+            rootFolder.mkdirs()
+            val payload = WebdavBookIndexStore(snapshot)
+            indexFile.writeText(indexStoreAdapter.toJson(payload))
+          }.onFailure { Timber.w(it, "Unable to persist WebDAV index cache") }
+        }
+      }
+    }
+
+    suspend fun readBookDetail(bookId: String): WebdavBookDetailCache? =
+      withContext(Dispatchers.IO) {
+        detailsMutex.withLock {
+          val file = provideDetailFile(bookId)
+          val json = runCatching { file.takeIf(File::exists)?.readText() }.getOrNull() ?: return@withLock null
+          runCatching { detailCacheAdapter.fromJson(json) }
+            .onFailure { Timber.w(it, "Unable to parse detail cache for $bookId") }
+            .getOrNull()
+        }
+      }
+
+    suspend fun saveBookDetail(cache: WebdavBookDetailCache) {
+      withContext(Dispatchers.IO) {
+        detailsMutex.withLock {
+          runCatching {
+            detailsFolder.mkdirs()
+            provideDetailFile(cache.bookId).writeText(detailCacheAdapter.toJson(cache))
+          }.onFailure { Timber.w(it, "Unable to persist detail cache for ${cache.bookId}") }
+        }
+      }
+    }
+
+    suspend fun removeBookDetail(bookId: String) {
+      withContext(Dispatchers.IO) {
+        detailsMutex.withLock {
+          runCatching { provideDetailFile(bookId).delete() }
+            .onFailure { Timber.w(it, "Unable to remove detail cache for $bookId") }
+        }
+      }
+    }
+
+    suspend fun clearBookDetails() {
+      withContext(Dispatchers.IO) {
+        detailsMutex.withLock {
+          runCatching {
+            if (detailsFolder.exists()) {
+              detailsFolder.deleteRecursively()
+            }
+            detailsFolder.mkdirs()
+          }.onFailure { Timber.w(it, "Unable to clear WebDAV detail cache") }
+        }
+      }
+    }
+
+    private fun loadBookIndexFromDisk(): List<WebdavBookIndexEntry> {
       val json = runCatching { indexFile.takeIf(File::exists)?.readText() }.getOrNull() ?: return emptyList()
       return runCatching { indexStoreAdapter.fromJson(json)?.items ?: emptyList() }
         .onFailure { Timber.w(it, "Unable to parse WebDAV index cache") }
         .getOrDefault(emptyList())
-    }
-
-    @Synchronized
-    fun saveBookIndex(entries: List<WebdavBookIndexEntry>) {
-      runCatching {
-        rootFolder.mkdirs()
-        val payload = WebdavBookIndexStore(entries)
-        indexFile.writeText(indexStoreAdapter.toJson(payload))
-      }.onFailure { Timber.w(it, "Unable to persist WebDAV index cache") }
-    }
-
-    @Synchronized
-    fun readBookDetail(bookId: String): WebdavBookDetailCache? {
-      val file = provideDetailFile(bookId)
-      val json = runCatching { file.takeIf(File::exists)?.readText() }.getOrNull() ?: return null
-      return runCatching { detailCacheAdapter.fromJson(json) }
-        .onFailure { Timber.w(it, "Unable to parse detail cache for $bookId") }
-        .getOrNull()
-    }
-
-    @Synchronized
-    fun saveBookDetail(cache: WebdavBookDetailCache) {
-      runCatching {
-        detailsFolder.mkdirs()
-        provideDetailFile(cache.bookId).writeText(detailCacheAdapter.toJson(cache))
-      }.onFailure { Timber.w(it, "Unable to persist detail cache for ${cache.bookId}") }
-    }
-
-    @Synchronized
-    fun removeBookDetail(bookId: String) {
-      runCatching { provideDetailFile(bookId).delete() }
-        .onFailure { Timber.w(it, "Unable to remove detail cache for $bookId") }
-    }
-
-    @Synchronized
-    fun clearBookDetails() {
-      runCatching {
-        if (detailsFolder.exists()) {
-          detailsFolder.deleteRecursively()
-        }
-        detailsFolder.mkdirs()
-      }.onFailure { Timber.w(it, "Unable to clear WebDAV detail cache") }
     }
 
     private fun provideDetailFile(bookId: String): File = detailsFolder.resolve("${WebdavPathCodec.encode(bookId)}.json")

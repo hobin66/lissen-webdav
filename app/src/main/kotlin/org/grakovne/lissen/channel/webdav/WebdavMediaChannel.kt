@@ -1,8 +1,13 @@
 package org.grakovne.lissen.channel.webdav
 
 import android.net.Uri
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import org.grakovne.lissen.channel.common.ConnectionHost
 import org.grakovne.lissen.channel.common.ConnectionInfo
 import org.grakovne.lissen.channel.common.MediaChannel
@@ -50,7 +55,11 @@ class WebdavMediaChannel
     private val metadataAdapter = moshi.adapter(WebdavBookMetadata::class.java)
     private val metadataMutationMutex = Mutex()
 
+    @Volatile
     private var cachedBooks: Map<String, IndexedBook> = emptyMap()
+
+    @Volatile
+    private var addedBooksSortedCache: Pair<Map<String, IndexedBook>, List<Book>>? = null
 
     override fun getLibraryType(): LibraryType = LibraryType.LIBRARY
 
@@ -107,18 +116,7 @@ class WebdavMediaChannel
       pageSize: Int,
       pageNumber: Int,
     ): OperationResult<PagedItems<Book>> {
-      val allBooks =
-        filterAddedBooks(ensureIndexedBooks().values.map { it.toIndexEntry() })
-          .sortedBy { it.title.lowercase() }
-          .map {
-            Book(
-              id = it.bookId,
-              subtitle = null,
-              series = null,
-              title = it.title,
-              author = it.author,
-            )
-          }
+      val allBooks = addedBooksSorted(ensureIndexedBooks())
 
       val from = pageNumber * pageSize
       val to = minOf(from + pageSize, allBooks.size)
@@ -148,21 +146,39 @@ class WebdavMediaChannel
 
       val lowered = query.lowercase()
       val result =
-        filterAddedBooks(ensureIndexedBooks().values.map { it.toIndexEntry() })
-          .map {
-            Book(
-              id = it.bookId,
-              subtitle = null,
-              series = null,
-              title = it.title,
-              author = it.author,
-            )
-          }.filter { book ->
+        addedBooksSorted(ensureIndexedBooks())
+          .asSequence()
+          .filter { book ->
             book.title.lowercase().contains(lowered) ||
               (book.author?.lowercase()?.contains(lowered) == true)
           }.take(limit)
+          .toList()
 
       return OperationResult.Success(result)
+    }
+
+    private fun addedBooksSorted(books: Map<String, IndexedBook>): List<Book> {
+      val cached = addedBooksSortedCache
+      if (cached != null && cached.first === books) {
+        return cached.second
+      }
+      val sorted =
+        books
+          .values
+          .asSequence()
+          .filter { it.isAdded }
+          .sortedBy { it.metadata.title.lowercase() }
+          .map {
+            Book(
+              id = it.metadata.id,
+              subtitle = null,
+              series = null,
+              title = it.metadata.title,
+              author = it.metadata.authorOrNull(),
+            )
+          }.toList()
+      addedBooksSortedCache = books to sorted
+      return sorted
     }
 
     suspend fun fetchManageBooks(forceRefresh: Boolean): OperationResult<List<WebdavManageBookItem>> {
@@ -274,7 +290,7 @@ class WebdavMediaChannel
 
       return filesResult.foldAsync(
         onSuccess = { resources ->
-          val orderedResources = resources.sortedWith(compareByNaturalResourceName())
+          val orderedResources = resources.sortedByNaturalName()
           val detail = buildWebdavDetail(indexedBook, orderedResources)
           val timestamp = parseTimestamp(indexedBook.directory.lastModified)
           val item =
@@ -327,45 +343,64 @@ class WebdavMediaChannel
       return resourcesResult.foldAsync(
         onSuccess = { resources ->
           val directories = resources.filter { it.isDirectory }
-          var progress = WebdavRefreshProgress.start(totalBooks = directories.size)
-          onProgress(progress)
+          val initialProgress = WebdavRefreshProgress.start(totalBooks = directories.size)
+          onProgress(initialProgress)
 
-          val mapped = mutableMapOf<String, IndexedBook>()
+          val progressMutex = Mutex()
+          var progress = initialProgress
+          val semaphore = Semaphore(REFRESH_PARALLELISM)
 
-          directories.forEach { directory ->
-            val persisted = persistedByDirectory[directory.relativePath]
-            val metadataResolution =
-              ensureBookMetadata(
-                directory = directory,
-                previous = persisted,
-              ) ?: return@foldAsync OperationResult.Error(OperationError.InternalError)
+          val refreshed =
+            coroutineScope {
+              directories
+                .map { directory ->
+                  async {
+                    semaphore.withPermit {
+                      val persisted = persistedByDirectory[directory.relativePath]
+                      val metadataResolution =
+                        ensureBookMetadata(directory = directory, previous = persisted)
+                          ?: return@withPermit null
 
-            val coverValidation =
-              resolveCoverValidation(
-                directory = directory,
-                coverName = metadataResolution.metadata.coverOrDefault(),
-                previous = persisted,
-                force = true,
-                bookId = metadataResolution.metadata.id,
-                dropLocalCoverOnChange = false,
-              )
+                      val coverValidation =
+                        resolveCoverValidation(
+                          directory = directory,
+                          coverName = metadataResolution.metadata.coverOrDefault(),
+                          previous = persisted,
+                          force = true,
+                          bookId = metadataResolution.metadata.id,
+                          dropLocalCoverOnChange = false,
+                        )
 
-            mapped[metadataResolution.metadata.id] =
-              IndexedBook(
-                metadata = metadataResolution.metadata,
-                directory = directory,
-                metadataEtag = metadataResolution.eTag,
-                metadataLastModified = metadataResolution.lastModified,
-                coverEtag = coverValidation.eTag,
-                coverLastModified = coverValidation.lastModified,
-                resolvedCoverName = null,
-                isCoverMissing = false,
-                isAdded = persisted?.isAdded ?: false,
-              )
+                      val book =
+                        IndexedBook(
+                          metadata = metadataResolution.metadata,
+                          directory = directory,
+                          metadataEtag = metadataResolution.eTag,
+                          metadataLastModified = metadataResolution.lastModified,
+                          coverEtag = coverValidation.eTag,
+                          coverLastModified = coverValidation.lastModified,
+                          resolvedCoverName = null,
+                          isCoverMissing = false,
+                          isAdded = persisted?.isAdded ?: false,
+                        )
 
-            progress = progress.advance()
-            onProgress(progress)
+                      progressMutex.withLock {
+                        progress = progress.advance()
+                        onProgress(progress)
+                      }
+
+                      book
+                    }
+                  }
+                }.awaitAll()
+                .filterNotNull()
+            }
+
+          if (refreshed.size != directories.size) {
+            return@foldAsync OperationResult.Error(OperationError.InternalError)
           }
+
+          val mapped = refreshed.associateBy { it.metadata.id }
 
           cachedBooks = mapped
           clearCachedCoverFiles()
@@ -427,25 +462,20 @@ class WebdavMediaChannel
     }
 
     private suspend fun ensureIndexedBooks(): Map<String, IndexedBook> {
+      val inMemory = cachedBooks
+      if (inMemory.isNotEmpty()) {
+        return inMemory
+      }
       val persisted = loadPersistedIndex()
-
       return when (
         resolveWebdavIndexSource(
-          hasInMemoryIndex = cachedBooks.isNotEmpty(),
+          hasInMemoryIndex = false,
           hasPersistedIndex = persisted.isNotEmpty(),
         )
       ) {
-        WebdavIndexSource.MEMORY -> {
-          cachedBooks
-        }
-
-        WebdavIndexSource.PERSISTED -> {
-          persisted
-        }
-
-        WebdavIndexSource.EMPTY -> {
-          emptyMap()
-        }
+        WebdavIndexSource.MEMORY -> cachedBooks
+        WebdavIndexSource.PERSISTED -> persisted
+        WebdavIndexSource.EMPTY -> emptyMap()
       }
     }
 
@@ -483,7 +513,7 @@ class WebdavMediaChannel
       return rebuildIndexLocked(force = true)
     }
 
-    private fun loadPersistedIndex(): Map<String, IndexedBook> =
+    private suspend fun loadPersistedIndex(): Map<String, IndexedBook> =
       persistentCache
         .readBookIndex()
         .associateBy { it.bookId }
@@ -507,7 +537,7 @@ class WebdavMediaChannel
       }
 
     private suspend fun rebuildIndexLocked(force: Boolean): Map<String, IndexedBook> =
-      rebuildIndexStrictLocked(force).fold(
+      rebuildIndexStrictLocked(force).foldAsync(
         onSuccess = { it },
         onFailure = { error ->
           Timber.w("Unable to list WebDAV directories for index: ${error.code}")
@@ -531,42 +561,54 @@ class WebdavMediaChannel
 
       return resourcesResult.foldAsync(
         onSuccess = { resources ->
-          val mapped = mutableMapOf<String, IndexedBook>()
+          val directories = resources.filter { it.isDirectory }
+          val semaphore = Semaphore(REFRESH_PARALLELISM)
 
-          resources
-            .filter { it.isDirectory }
-            .forEach { directory ->
-              val persisted = persistedByDirectory[directory.relativePath]
-              val metadataResolution = ensureBookMetadata(directory, persisted) ?: return@forEach
+          val entries =
+            coroutineScope {
+              directories
+                .map { directory ->
+                  async {
+                    semaphore.withPermit {
+                      val persisted = persistedByDirectory[directory.relativePath]
+                      val metadataResolution = ensureBookMetadata(directory, persisted) ?: return@withPermit null
 
-              val coverValidation =
-                resolveCoverValidation(
-                  directory = directory,
-                  coverName = metadataResolution.metadata.coverOrDefault(),
-                  previous = persisted,
-                  force = force,
-                  bookId = metadataResolution.metadata.id,
-                )
+                      val coverValidation =
+                        resolveCoverValidation(
+                          directory = directory,
+                          coverName = metadataResolution.metadata.coverOrDefault(),
+                          previous = persisted,
+                          force = force,
+                          bookId = metadataResolution.metadata.id,
+                        )
 
-              if (isDirectoryValidationChanged(persisted, directory)) {
-                persistentCache.removeBookDetail(metadataResolution.metadata.id)
-              }
+                      val directoryChanged = isDirectoryValidationChanged(persisted, directory)
 
-              val indexedBook =
-                IndexedBook(
-                  metadata = metadataResolution.metadata,
-                  directory = directory,
-                  metadataEtag = metadataResolution.eTag,
-                  metadataLastModified = metadataResolution.lastModified,
-                  coverEtag = coverValidation.eTag,
-                  coverLastModified = coverValidation.lastModified,
-                  resolvedCoverName = if (force) null else persisted?.resolvedCoverName,
-                  isCoverMissing = if (force) false else persisted?.isCoverMissing ?: false,
-                  isAdded = persisted?.isAdded ?: false,
-                )
+                      val indexedBook =
+                        IndexedBook(
+                          metadata = metadataResolution.metadata,
+                          directory = directory,
+                          metadataEtag = metadataResolution.eTag,
+                          metadataLastModified = metadataResolution.lastModified,
+                          coverEtag = coverValidation.eTag,
+                          coverLastModified = coverValidation.lastModified,
+                          resolvedCoverName = if (force) null else persisted?.resolvedCoverName,
+                          isCoverMissing = if (force) false else persisted?.isCoverMissing ?: false,
+                          isAdded = persisted?.isAdded ?: false,
+                        )
 
-              mapped[metadataResolution.metadata.id] = indexedBook
+                      RebuildEntry(book = indexedBook, directoryChanged = directoryChanged)
+                    }
+                  }
+                }.awaitAll()
+                .filterNotNull()
             }
+
+          entries
+            .filter { it.directoryChanged }
+            .forEach { persistentCache.removeBookDetail(it.book.metadata.id) }
+
+          val mapped = entries.associate { it.book.metadata.id to it.book }
 
           persistentCache.saveBookIndex(
             mapped
@@ -903,7 +945,7 @@ class WebdavMediaChannel
     private fun IndexedBook.updateCoverState(transform: (WebdavBookIndexEntry) -> WebdavBookIndexEntry): IndexedBook =
       transform(toIndexEntry()).toIndexedBook()
 
-    private fun updateIndexedBook(
+    private suspend fun updateIndexedBook(
       bookId: String,
       transform: (WebdavBookIndexEntry) -> WebdavBookIndexEntry,
     ) {
@@ -911,7 +953,7 @@ class WebdavMediaChannel
       putIndexedBook(current.updateCoverState(transform))
     }
 
-    private fun putIndexedBook(updated: IndexedBook) {
+    private suspend fun putIndexedBook(updated: IndexedBook) {
       cachedBooks =
         cachedBooks
           .toMutableMap()
@@ -919,7 +961,7 @@ class WebdavMediaChannel
       persistentCache.saveBookIndex(cachedBooks.values.map { it.toIndexEntry() })
     }
 
-    private fun clearCachedCoverFiles() {
+    private suspend fun clearCachedCoverFiles() {
       (cachedBooks.keys + persistentCache.readBookIndex().map { it.bookId })
         .toSet()
         .forEach(::dropLocalCover)
@@ -961,38 +1003,24 @@ class WebdavMediaChannel
         lowercase().endsWith(".wav") ||
         lowercase().endsWith(".mp4")
 
-    private fun compareByNaturalResourceName(): Comparator<WebdavResource> =
-      Comparator { first, second ->
-        compareNatural(first.name.lowercase(), second.name.lowercase())
-      }
+    private fun List<WebdavResource>.sortedByNaturalName(): List<WebdavResource> {
+      if (size < 2) return this
+      val keyed = map { it to naturalKeyOf(it.name.lowercase()) }
+      return keyed
+        .sortedWith(naturalKeyComparator)
+        .map { it.first }
+    }
 
-    private fun compareNatural(
-      first: String,
-      second: String,
-    ): Int {
-      val firstChunks = chunkRegex.findAll(first).map { it.value }.toList()
-      val secondChunks = chunkRegex.findAll(second).map { it.value }.toList()
-      val maxChunks = maxOf(firstChunks.size, secondChunks.size)
-
-      for (index in 0 until maxChunks) {
-        val firstChunk = firstChunks.getOrNull(index) ?: return -1
-        val secondChunk = secondChunks.getOrNull(index) ?: return 1
-
-        val firstNumber = firstChunk.toLongOrNull()
-        val secondNumber = secondChunk.toLongOrNull()
-
-        val comparison =
-          when (firstNumber != null && secondNumber != null) {
-            true -> firstNumber.compareTo(secondNumber)
-            false -> firstChunk.compareTo(secondChunk)
-          }
-
-        if (comparison != 0) {
-          return comparison
-        }
-      }
-
-      return first.compareTo(second)
+    private fun naturalKeyOf(name: String): NaturalKey {
+      val chunks =
+        chunkRegex
+          .findAll(name)
+          .map { match ->
+            val value = match.value
+            val number = value.toLongOrNull()
+            if (number != null) NaturalChunk(text = null, number = number) else NaturalChunk(text = value, number = null)
+          }.toList()
+      return NaturalKey(chunks = chunks, original = name)
     }
 
     data class IndexedBook(
@@ -1018,12 +1046,55 @@ class WebdavMediaChannel
       val lastModified: String?,
     )
 
+    private data class RebuildEntry(
+      val book: IndexedBook,
+      val directoryChanged: Boolean,
+    )
+
+    private data class NaturalChunk(
+      val text: String?,
+      val number: Long?,
+    )
+
+    private data class NaturalKey(
+      val chunks: List<NaturalChunk>,
+      val original: String,
+    )
+
     companion object {
       const val WEBDAV_LIBRARY_ID = "webdav_library"
       const val WEBDAV_LIBRARY_TITLE = "书架"
 
+      private const val REFRESH_PARALLELISM = 6
+
       private val chunkRegex = Regex("""\d+|\D+""")
       private const val unresolvedDisplayDurationSeconds = 0.0
       private const val unresolvedTimelineDurationSeconds = 1.0
+
+      private val naturalKeyComparator =
+        Comparator<Pair<WebdavResource, NaturalKey>> { left, right ->
+          val first = left.second
+          val second = right.second
+          val maxChunks = maxOf(first.chunks.size, second.chunks.size)
+          for (index in 0 until maxChunks) {
+            val firstChunk = first.chunks.getOrNull(index) ?: return@Comparator -1
+            val secondChunk = second.chunks.getOrNull(index) ?: return@Comparator 1
+            val comparison =
+              when {
+                firstChunk.number != null && secondChunk.number != null -> {
+                  firstChunk.number.compareTo(secondChunk.number)
+                }
+
+                else -> {
+                  (firstChunk.text ?: firstChunk.number.toString())
+                    .compareTo(secondChunk.text ?: secondChunk.number.toString())
+                }
+              }
+            if (comparison != 0) {
+              return@Comparator comparison
+            }
+          }
+          first.original.compareTo(second.original)
+        }
     }
   }
