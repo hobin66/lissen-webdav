@@ -9,6 +9,10 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
     <application
         android:name=".LissenApplication"
         android:allowBackup="true"
@@ -69,6 +73,14 @@
             android:foregroundServiceType="dataSync"
             android:enabled="true"
             android:permission="android.permission.FOREGROUND_SERVICE" />
+
+        <receiver
+            android:name=".playback.service.SleepTimerAlarmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.grakovne.lissen.player.SLEEP_TIMER_ALARM" />
+            </intent-filter>
+        </receiver>
 
         <receiver
             android:name=".widget.PlayerWidgetReceiver"

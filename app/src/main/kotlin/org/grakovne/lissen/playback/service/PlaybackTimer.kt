@@ -1,7 +1,13 @@
 package org.grakovne.lissen.playback.service
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import androidx.media3.common.Player
@@ -21,20 +27,22 @@ class PlaybackTimer
     private val exoPlayer: ExoPlayer,
   ) {
     private val localBroadcastManager = LocalBroadcastManager.getInstance(applicationContext)
+    private val alarmManager = applicationContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+    private val uiTickHandler = Handler(Looper.getMainLooper())
 
     private var option: TimerOption? = null
-    private var timer: SuspendableCountDownTimer? = null
+    private var targetElapsedRealtimeMillis: Long? = null
+    private var pausedRemainingMillis: Long? = null
+    private var alarmActive = false
+    private var uiTickRunnable: Runnable? = null
 
     private val playerListener =
       object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-          val currentTimer = timer ?: return
-
-          if (option == CurrentEpisodeTimerOption) {
-            when (isPlaying) {
-              true -> timer = currentTimer.resume()
-              false -> currentTimer.pause()
-            }
+          if (option != CurrentEpisodeTimerOption) return
+          when {
+            isPlaying && pausedRemainingMillis != null -> resumeAlarm()
+            !isPlaying && targetElapsedRealtimeMillis != null -> pauseAlarm()
           }
         }
       }
@@ -49,26 +57,107 @@ class PlaybackTimer
       val totalMillis = (delayInSeconds * 1000).toLong()
       if (totalMillis <= 0L) return
 
-      broadcastRemaining(delayInSeconds.toLong())
-
-      timer =
-        SuspendableCountDownTimer(
-          totalMillis = totalMillis,
-          intervalMillis = 500L,
-          onTickSeconds = { seconds -> broadcastRemaining(seconds) },
-          onFinished = {
-            localBroadcastManager.sendBroadcast(Intent(PlaybackService.TIMER_EXPIRED))
-            stopTimer()
-          },
-        ).also { it.start() }
+      this.option = option
 
       exoPlayer.removeListener(playerListener)
       exoPlayer.addListener(playerListener)
 
-      this.option = option
-      if (exoPlayer.isPlaying.not() && option == CurrentEpisodeTimerOption) {
-        timer?.pause()
+      if (option == CurrentEpisodeTimerOption && !exoPlayer.isPlaying) {
+        pausedRemainingMillis = totalMillis
+        broadcastRemaining(totalMillis / 1000)
+        return
       }
+
+      scheduleAlarm(totalMillis)
+      startUiTicker()
+    }
+
+    fun stopTimer() {
+      cancelAlarm()
+      stopUiTicker()
+      targetElapsedRealtimeMillis = null
+      pausedRemainingMillis = null
+      option = null
+      exoPlayer.removeListener(playerListener)
+    }
+
+    @OptIn(UnstableApi::class)
+    fun onAlarmFired() {
+      stopUiTicker()
+      targetElapsedRealtimeMillis = null
+      pausedRemainingMillis = null
+      option = null
+      alarmActive = false
+      exoPlayer.removeListener(playerListener)
+      localBroadcastManager.sendBroadcast(Intent(PlaybackService.TIMER_EXPIRED))
+    }
+
+    private fun scheduleAlarm(remainingMillis: Long) {
+      val target = SystemClock.elapsedRealtime() + remainingMillis
+      targetElapsedRealtimeMillis = target
+      pausedRemainingMillis = null
+
+      val pendingIntent = sleepPendingIntent()
+      val canScheduleExact =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
+
+      if (canScheduleExact) {
+        alarmManager.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, target, pendingIntent)
+      } else {
+        alarmManager.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, target, pendingIntent)
+      }
+      alarmActive = true
+      broadcastRemaining(remainingMillis / 1000)
+    }
+
+    private fun pauseAlarm() {
+      val target = targetElapsedRealtimeMillis ?: return
+      cancelAlarm()
+      val remaining = (target - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+      pausedRemainingMillis = remaining
+      targetElapsedRealtimeMillis = null
+      stopUiTicker()
+      broadcastRemaining(remaining / 1000)
+    }
+
+    private fun resumeAlarm() {
+      val remaining = pausedRemainingMillis ?: return
+      if (remaining <= 0L) {
+        onAlarmFired()
+        return
+      }
+      scheduleAlarm(remaining)
+      startUiTicker()
+    }
+
+    private fun cancelAlarm() {
+      if (alarmActive) {
+        alarmManager.cancel(sleepPendingIntent())
+        alarmActive = false
+      }
+    }
+
+    private fun startUiTicker() {
+      stopUiTicker()
+      val runnable =
+        object : Runnable {
+          override fun run() {
+            val target = targetElapsedRealtimeMillis ?: return
+            val remainingMillis = (target - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+            val remainingSeconds = remainingMillis / 1000
+            broadcastRemaining(remainingSeconds)
+            if (remainingMillis > 0L) {
+              uiTickHandler.postDelayed(this, UI_TICK_INTERVAL_MILLIS)
+            }
+          }
+        }
+      uiTickRunnable = runnable
+      uiTickHandler.post(runnable)
+    }
+
+    private fun stopUiTicker() {
+      uiTickRunnable?.let { uiTickHandler.removeCallbacks(it) }
+      uiTickRunnable = null
     }
 
     @OptIn(UnstableApi::class)
@@ -79,10 +168,19 @@ class PlaybackTimer
       )
     }
 
-    fun stopTimer() {
-      timer?.cancel()
-      timer = null
+    private fun sleepPendingIntent(): PendingIntent =
+      PendingIntent.getBroadcast(
+        applicationContext,
+        ALARM_REQUEST_CODE,
+        Intent(applicationContext, SleepTimerAlarmReceiver::class.java)
+          .setAction(ACTION_SLEEP_TIMER_ALARM)
+          .setPackage(applicationContext.packageName),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      )
 
-      exoPlayer.removeListener(playerListener)
+    companion object {
+      const val ACTION_SLEEP_TIMER_ALARM = "org.grakovne.lissen.player.SLEEP_TIMER_ALARM"
+      private const val ALARM_REQUEST_CODE = 0x5337
+      private const val UI_TICK_INTERVAL_MILLIS = 1_000L
     }
   }
