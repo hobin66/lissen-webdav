@@ -25,14 +25,10 @@ interface CachedBookmarkDao {
     """
     DELETE
     FROM cached_bookmark
-    WHERE libraryItemId = :libraryItemId
-      AND totalPosition = :totalPosition
+    WHERE id = :bookmarkId
     """,
   )
-  suspend fun deleteByLibraryItemIdAndTotalPosition(
-    libraryItemId: String,
-    totalPosition: Long,
-  ): Int
+  suspend fun deleteById(bookmarkId: String): Int
 
   @Query("DELETE FROM cached_bookmark")
   suspend fun deleteAll()

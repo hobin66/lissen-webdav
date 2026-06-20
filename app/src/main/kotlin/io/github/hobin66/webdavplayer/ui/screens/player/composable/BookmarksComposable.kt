@@ -114,10 +114,10 @@ fun BookmarksComposable(
         itemsIndexed(bookmarks) { index, item ->
           BookmarkRow(
             title = item.title,
-            timeText = item.totalPosition.toInt().formatTime(true),
+            timeText = (item.chapterPosition ?: item.totalPosition).toInt().formatTime(true),
             titleColor = colorScheme.onBackground,
             timeColor = colorScheme.onBackground.copy(alpha = 0.6f),
-            onClick = { playerViewModel.setTotalPosition(item.totalPosition) },
+            onClick = { playerViewModel.playBookmark(item) },
             trailing = {
               IconButton(
                 onClick = { withHaptic(view) { playerViewModel.dropBookmark(item) } },

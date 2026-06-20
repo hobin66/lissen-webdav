@@ -15,10 +15,13 @@ class CachedBookmarkEntityConverter
       syncState: BookmarkSyncState,
     ): Bookmark =
       Bookmark(
+        id = entity.id,
         libraryItemId = entity.libraryItemId,
         title = entity.title,
         totalPosition = entity.totalPosition.toDouble(),
         createdAt = entity.createdAt,
         syncState = syncState,
+        chapterId = entity.chapterId,
+        chapterPosition = entity.chapterPosition,
       )
   }

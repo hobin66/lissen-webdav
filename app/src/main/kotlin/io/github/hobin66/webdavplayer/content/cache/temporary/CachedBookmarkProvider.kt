@@ -14,6 +14,7 @@ import io.github.hobin66.webdavplayer.lib.domain.BookmarkSyncState
 import io.github.hobin66.webdavplayer.lib.domain.CreateBookmarkRequest
 import io.github.hobin66.webdavplayer.lib.domain.isSame
 import io.github.hobin66.webdavplayer.persistence.preferences.WebdavPlayerPreferences
+import java.util.UUID
 
 @Singleton
 class CachedBookmarkProvider
@@ -53,7 +54,7 @@ class CachedBookmarkProvider
               ),
             ).foldAsync(
               onSuccess = { remoteCreated ->
-                localCacheRepository.deleteBookmark(pending.libraryItemId, pending.totalPosition)
+                localCacheRepository.deleteBookmark(pending.id)
                 localCacheRepository.upsertBookmark(remoteCreated.copy(syncState = BookmarkSyncState.SYNCED))
               },
               onFailure = { Unit },
@@ -70,7 +71,7 @@ class CachedBookmarkProvider
             .dropBookmark(pendingDelete)
             .foldAsync(
               onSuccess = {
-                localCacheRepository.deleteBookmark(pendingDelete.libraryItemId, pendingDelete.totalPosition)
+                localCacheRepository.deleteBookmark(pendingDelete.id)
               },
               onFailure = { Unit },
             )
@@ -93,12 +94,13 @@ class CachedBookmarkProvider
         .asSequence()
         .filter { it.syncState == BookmarkSyncState.SYNCED }
         .filter { l -> remote.none { r -> r.isSame(l) } }
-        .forEach { orphan -> localCacheRepository.deleteBookmark(orphan.libraryItemId, orphan.totalPosition) }
+        .forEach { orphan -> localCacheRepository.deleteBookmark(orphan.id) }
 
       return provideBookmarks(libraryItemId)
     }
 
     suspend fun createBookmark(
+      chapterId: String,
       chapterTime: Double,
       totalTime: Double,
       libraryItemId: String,
@@ -106,11 +108,14 @@ class CachedBookmarkProvider
     ): Bookmark {
       val localDraft =
         Bookmark(
+          id = UUID.randomUUID().toString(),
           libraryItemId = libraryItemId,
           title = buildBookmarkTitle(currentChapter, chapterTime),
           totalPosition = totalTime,
           createdAt = System.currentTimeMillis(),
           syncState = BookmarkSyncState.PENDING_CREATE,
+          chapterId = chapterId,
+          chapterPosition = chapterTime,
         )
 
       localCacheRepository.upsertBookmark(localDraft)
@@ -144,7 +149,7 @@ class CachedBookmarkProvider
         .provideMediaChannel()
         .dropBookmark(bookmark)
         .foldAsync(
-          onSuccess = { localCacheRepository.deleteBookmark(bookmark.libraryItemId, bookmark.totalPosition) },
+          onSuccess = { localCacheRepository.deleteBookmark(bookmark.id) },
           onFailure = { Unit },
         )
     }

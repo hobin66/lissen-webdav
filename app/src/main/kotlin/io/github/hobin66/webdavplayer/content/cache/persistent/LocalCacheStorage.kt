@@ -24,7 +24,7 @@ import io.github.hobin66.webdavplayer.content.cache.persistent.entity.MediaProgr
     CachedLibraryEntity::class,
     CachedBookmarkEntity::class,
   ],
-  version = 1,
+  version = 2,
   exportSchema = true,
 )
 abstract class LocalCacheStorage : RoomDatabase() {

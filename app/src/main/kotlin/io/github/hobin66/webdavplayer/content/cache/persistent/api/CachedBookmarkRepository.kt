@@ -6,7 +6,6 @@ import io.github.hobin66.webdavplayer.content.cache.persistent.entity.CachedBook
 import io.github.hobin66.webdavplayer.lib.domain.Bookmark
 import io.github.hobin66.webdavplayer.lib.domain.asBookmarkSyncState
 import io.github.hobin66.webdavplayer.lib.domain.asInteger
-import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -25,24 +24,19 @@ class CachedBookmarkRepository
     suspend fun upsertBookmark(bookmark: Bookmark) {
       dao.upsert(
         CachedBookmarkEntity(
-          id = UUID.randomUUID().toString(),
+          id = bookmark.id,
           title = bookmark.title,
           libraryItemId = bookmark.libraryItemId,
           createdAt = bookmark.createdAt,
           totalPosition = bookmark.totalPosition.toLong(),
           syncState = bookmark.syncState.asInteger(),
+          chapterId = bookmark.chapterId,
+          chapterPosition = bookmark.chapterPosition,
         ),
       )
     }
 
-    suspend fun deleteBookmark(
-      libraryItemId: String,
-      totalPosition: Double,
-    ): Boolean =
-      dao.deleteByLibraryItemIdAndTotalPosition(
-        libraryItemId = libraryItemId,
-        totalPosition = totalPosition.toLong(),
-      ) > 0
+    suspend fun deleteBookmark(bookmarkId: String): Boolean = dao.deleteById(bookmarkId) > 0
 
     suspend fun deleteAll() {
       dao.deleteAll()

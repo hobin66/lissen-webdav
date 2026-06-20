@@ -235,6 +235,22 @@ data class DirectQueueSeekTarget(
   val positionMs: Long,
 )
 
+fun resolveDirectQueueChapterSeekTarget(
+  chapters: List<io.github.hobin66.webdavplayer.lib.domain.PlayingChapter>,
+  chapterId: String,
+  chapterPositionSeconds: Double,
+): DirectQueueSeekTarget? {
+  val chapterIndex = chapters.indexOfFirst { it.id == chapterId }
+  if (chapterIndex < 0) {
+    return null
+  }
+
+  return DirectQueueSeekTarget(
+    mediaItemIndex = chapterIndex,
+    positionMs = (chapterPositionSeconds.coerceAtLeast(0.0) * 1000).toLong(),
+  )
+}
+
 fun resolveDirectQueueRelativeSeekTarget(
   currentMediaItemIndex: Int,
   mediaItemCount: Int,

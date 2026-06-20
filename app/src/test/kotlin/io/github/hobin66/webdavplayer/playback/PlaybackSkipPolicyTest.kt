@@ -483,6 +483,26 @@ class PlaybackSkipPolicyTest {
     )
   }
 
+  @Test
+  fun `direct queue chapter seek target resolves by chapter id and chapter position`() {
+    assertEquals(
+      DirectQueueSeekTarget(mediaItemIndex = 1, positionMs = 32_500L),
+      resolveDirectQueueChapterSeekTarget(
+        chapters = listOf(chapter("ch-1"), chapter("ch-2"), chapter("ch-3")),
+        chapterId = "ch-2",
+        chapterPositionSeconds = 32.5,
+      ),
+    )
+
+    assertNull(
+      resolveDirectQueueChapterSeekTarget(
+        chapters = listOf(chapter("ch-1")),
+        chapterId = "missing",
+        chapterPositionSeconds = 5.0,
+      ),
+    )
+  }
+
   private fun detailedItem(
     files: List<BookFile>,
     chapters: List<PlayingChapter>,

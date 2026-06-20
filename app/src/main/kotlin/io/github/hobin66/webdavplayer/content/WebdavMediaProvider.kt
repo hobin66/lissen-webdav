@@ -59,6 +59,7 @@ class WebdavMediaProvider
 
     suspend fun createBookmark(
       libraryItemId: String,
+      chapterId: String,
       chapterPosition: Double,
       totalPosition: Double,
     ): Bookmark? {
@@ -66,6 +67,7 @@ class WebdavMediaProvider
 
       return cachedBookmarkProvider
         .createBookmark(
+          chapterId = chapterId,
           chapterTime = chapterPosition,
           libraryItemId = libraryItemId,
           totalTime = totalPosition,

@@ -27,7 +27,7 @@ object LocalCacheModule {
       context = context,
       klass = LocalCacheStorage::class.java,
       name = DATABASE_NAME,
-    ).build()
+    ).fallbackToDestructiveMigration(dropAllTables = true).build()
   }
 
   @Provides

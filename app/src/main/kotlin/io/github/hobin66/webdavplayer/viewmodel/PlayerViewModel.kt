@@ -79,6 +79,10 @@ class PlayerViewModel
       }
     }
 
+    fun playBookmark(bookmark: Bookmark) {
+      mediaRepository.playBookmark(bookmark)
+    }
+
     fun updateBookmarks() {
       viewModelScope.launch { mediaRepository.updateBookmarks() }
     }

@@ -220,11 +220,8 @@ class LocalCacheRepository
       cachedBookmarkRepository.upsertBookmark(bookmark)
     }
 
-    suspend fun deleteBookmark(
-      libraryItemId: String,
-      totalPosition: Double,
-    ) {
-      cachedBookmarkRepository.deleteBookmark(libraryItemId, totalPosition)
+    suspend fun deleteBookmark(bookmarkId: String) {
+      cachedBookmarkRepository.deleteBookmark(bookmarkId)
     }
 
     suspend fun clearAll() {

@@ -24,6 +24,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Lissen"
+rootProject.name = "WebdavPlayer"
 include(":app")
 include(":lib")

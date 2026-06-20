@@ -22,4 +22,6 @@ data class CachedBookmarkEntity(
   val createdAt: Long,
   val totalPosition: Long,
   val syncState: Int,
+  val chapterId: String?,
+  val chapterPosition: Double?,
 )

@@ -39,6 +39,7 @@ import io.github.hobin66.webdavplayer.lib.domain.PlayingChapter
 import io.github.hobin66.webdavplayer.lib.domain.RecentBook
 import io.github.hobin66.webdavplayer.persistence.preferences.WebdavPlayerPreferences
 import timber.log.Timber
+import java.nio.charset.StandardCharsets
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.UUID
@@ -836,7 +837,7 @@ class WebdavMediaChannel
       val defaultMetadata =
         WebdavBookMetadata(
           version = 1,
-          id = UUID.randomUUID().toString(),
+          id = defaultWebdavMetadataId(directory.relativePath),
           title = directory.name,
           author = null,
           description = null,
@@ -844,7 +845,15 @@ class WebdavMediaChannel
         )
 
       val metadataPath = "${directory.relativePath}/.webdav-player-book.json"
-      webdavClient.putTextIfAbsent(metadataPath, metadataAdapter.toJson(defaultMetadata))
+      when (val result = webdavClient.putTextIfAbsent(metadataPath, metadataAdapter.toJson(defaultMetadata))) {
+        is OperationResult.Error -> {
+          Timber.w("Unable to persist default WebDAV metadata for %s: %s", directory.relativePath, result.code)
+        }
+
+        is OperationResult.Success -> {
+          Unit
+        }
+      }
 
       return defaultMetadata
     }
@@ -1106,6 +1115,9 @@ class WebdavMediaChannel
       private val chunkRegex = Regex("""\d+|\D+""")
       private const val unresolvedDisplayDurationSeconds = 0.0
       private const val unresolvedTimelineDurationSeconds = 1.0
+
+      internal fun defaultWebdavMetadataId(directoryRelativePath: String): String =
+        UUID.nameUUIDFromBytes(directoryRelativePath.toByteArray(StandardCharsets.UTF_8)).toString()
 
       private val naturalKeyComparator =
         Comparator<Pair<WebdavResource, NaturalKey>> { left, right ->

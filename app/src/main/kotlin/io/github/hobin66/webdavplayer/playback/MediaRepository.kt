@@ -867,12 +867,20 @@ class MediaRepository
 
     suspend fun createBookmark() {
       val playingBook = _playingBook.value ?: return
+      val chapterIndex = _currentChapterIndex.value ?: return
       val chapterPosition = _currentChapterPosition.value ?: return
       val totalPosition = _totalPosition.value ?: return
+      val chapterId =
+        playingBook
+          .chapters
+          .getOrNull(chapterIndex)
+          ?.id
+          ?: return
 
       mediaChannel
         .createBookmark(
           libraryItemId = playingBook.id,
+          chapterId = chapterId,
           chapterPosition = chapterPosition,
           totalPosition = totalPosition,
         )
@@ -884,6 +892,34 @@ class MediaRepository
       mediaChannel.dropBookmark(bookmark = bookmark)
 
       _bookmarks.value = mediaChannel.provideBookmarks(bookmark.libraryItemId)
+    }
+
+    fun playBookmark(bookmark: Bookmark) {
+      val book = playingBook.value ?: return
+
+      if (usesDirectFileQueue(book) && ::mediaController.isInitialized) {
+        val chapterId = bookmark.chapterId
+        val chapterPosition = bookmark.chapterPosition
+
+        if (chapterId != null && chapterPosition != null) {
+          val target = resolveDirectQueueChapterSeekTarget(book.chapters, chapterId, chapterPosition)
+          if (target != null) {
+            seekToDirectQueueTarget(target)
+            return
+          }
+        }
+      }
+
+      val absolutePosition =
+        bookmark.chapterId
+          ?.let { chapterId -> book.chapters.indexOfFirst { it.id == chapterId } }
+          ?.takeIf { it >= 0 }
+          ?.let { chapterIndex ->
+            val chapterStart = book.chapters[chapterIndex].start
+            chapterStart + (bookmark.chapterPosition ?: 0.0).coerceAtLeast(0.0)
+          } ?: bookmark.totalPosition
+
+      setTotalPosition(absolutePosition)
     }
 
     suspend fun updateBookmarks() {
