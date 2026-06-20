@@ -3,8 +3,10 @@ package org.grakovne.lissen.playback
 import androidx.media3.common.C
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
+import org.grakovne.lissen.common.PlaybackVolumeBoost
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -19,7 +21,7 @@ class PlaybackOptimizationPolicyTest {
 
   @Test
   fun `audio offload stays disabled by default for playback stability`() {
-    val preferences = provideAudioOffloadPreferences()
+    val preferences = provideAudioOffloadPreferences(PlaybackVolumeBoost.DISABLED)
 
     assertEquals(
       TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED,
@@ -27,6 +29,82 @@ class PlaybackOptimizationPolicyTest {
     )
     assertFalse(preferences.isGaplessSupportRequired)
     assertFalse(preferences.isSpeedChangeSupportRequired)
+  }
+
+  @Test
+  fun `audio offload is disabled while loudness enhancement is active`() {
+    val preferences = provideAudioOffloadPreferences(PlaybackVolumeBoost.HIGH)
+
+    assertEquals(
+      TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED,
+      preferences.audioOffloadMode,
+    )
+  }
+
+  @Test
+  fun `playback progress refresh runs once per second only while actively playing`() {
+    assertEquals(1_000L, resolvePlaybackProgressUpdateIntervalMs(isPlaying = true))
+    assertNull(resolvePlaybackProgressUpdateIntervalMs(isPlaying = false))
+  }
+
+  @Test
+  fun `chapter metadata offset resolves total position without recomputing chapter sums`() {
+    assertEquals(
+      92.5,
+      resolveTotalPositionSeconds(
+        chapterStartOffsetMs = 90_000L,
+        chapterPositionMs = 2_500L,
+      ),
+    )
+  }
+
+  @Test
+  fun `missing chapter metadata offset does not resolve total position`() {
+    assertNull(resolveTotalPositionSeconds(chapterStartOffsetMs = null, chapterPositionMs = 2_500L))
+  }
+
+  @Test
+  fun `paused playback refreshes progress after a meaningful seek`() {
+    assertTrue(
+      shouldRefreshPlaybackProgressOnPositionDiscontinuity(
+        isPlaying = false,
+        previousTotalPositionSeconds = 12.0,
+        currentTotalPositionSeconds = 42.0,
+      ),
+    )
+  }
+
+  @Test
+  fun `active playback does not double refresh progress on discontinuity`() {
+    assertFalse(
+      shouldRefreshPlaybackProgressOnPositionDiscontinuity(
+        isPlaying = true,
+        previousTotalPositionSeconds = 12.0,
+        currentTotalPositionSeconds = 42.0,
+      ),
+    )
+  }
+
+  @Test
+  fun `tiny paused playback discontinuities do not trigger redundant refresh`() {
+    assertFalse(
+      shouldRefreshPlaybackProgressOnPositionDiscontinuity(
+        isPlaying = false,
+        previousTotalPositionSeconds = 12.0,
+        currentTotalPositionSeconds = 12.02,
+      ),
+    )
+  }
+
+  @Test
+  fun `first paused playback discontinuity refreshes when no previous progress exists`() {
+    assertTrue(
+      shouldRefreshPlaybackProgressOnPositionDiscontinuity(
+        isPlaying = false,
+        previousTotalPositionSeconds = null,
+        currentTotalPositionSeconds = 5.0,
+      ),
+    )
   }
 
   @Test

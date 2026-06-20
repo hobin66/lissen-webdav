@@ -43,8 +43,8 @@ class SettingsViewModel
     private val _libraries = MutableLiveData<List<Library>>(emptyList())
     val libraries = _libraries
 
-    private val _preferredLibrary = MutableLiveData<Library>(preferences.getPreferredLibrary())
-    val preferredLibrary = _preferredLibrary
+    private val _preferredLibrary = MutableLiveData<Library?>(preferences.getPreferredLibrary())
+    val preferredLibrary: LiveData<Library?> = _preferredLibrary
 
     private val _preferredColorScheme = MutableLiveData(preferences.getColorScheme())
     val preferredColorScheme = _preferredColorScheme

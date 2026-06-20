@@ -35,7 +35,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.map
 import kotlinx.coroutines.launch
 import org.grakovne.lissen.R
 import org.grakovne.lissen.content.cache.persistent.CacheState
@@ -60,16 +59,24 @@ fun NavigationBarComposable(
   modifier: Modifier = Modifier,
   libraryType: LibraryType,
 ) {
-  val cacheProgress: CacheState by contentCachingModelView.getProgress(book.id).collectAsState()
+  val cacheProgressFlow =
+    remember(book.id) {
+      contentCachingModelView.getProgress(book.id)
+    }
+  val cacheProgress: CacheState by cacheProgressFlow.collectAsState()
   val timerOption by playerViewModel.timerOption.observeAsState(null)
   val timerRemaining by playerViewModel.timerRemaining.observeAsState(0)
   val preferredSleepTimerStopMode by
     playerViewModel.preferredSleepTimerStopMode.observeAsState(DurationTimerStopMode.IMMEDIATE)
   val playbackSpeed by playerViewModel.playbackSpeed.observeAsState(1f)
   val playingQueueExpanded by playerViewModel.playingQueueExpanded.observeAsState(false)
-  val hasEpisodes by playerViewModel.book.map { book.chapters.isNotEmpty() }.observeAsState(true)
+  val hasEpisodes = book.chapters.isNotEmpty()
 
-  val isMetadataCached by contentCachingModelView.provideCacheState(book.id).observeAsState(false)
+  val metadataCachedLiveData =
+    remember(book.id) {
+      contentCachingModelView.provideCacheState(book.id)
+    }
+  val isMetadataCached by metadataCachedLiveData.observeAsState(false)
 
   var playbackSpeedExpanded by remember { mutableStateOf(false) }
   var skipExpanded by remember { mutableStateOf(false) }

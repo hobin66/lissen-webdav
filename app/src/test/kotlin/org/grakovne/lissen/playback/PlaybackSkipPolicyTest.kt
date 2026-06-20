@@ -71,6 +71,86 @@ class PlaybackSkipPolicyTest {
   }
 
   @Test
+  fun `skip checks stay frequent near intro and outro boundaries`() {
+    val settings = BookSkipSettings(introSkipSeconds = 10, outroSkipSeconds = 8)
+
+    assertEquals(
+      250L,
+      resolveSkipCheckIntervalMs(
+        isPlaying = true,
+        chapterPositionSeconds = 2.0,
+        chapterDurationSeconds = 100.0,
+        settings = settings,
+        playbackSpeed = 1f,
+      ),
+    )
+
+    assertEquals(
+      250L,
+      resolveSkipCheckIntervalMs(
+        isPlaying = true,
+        chapterPositionSeconds = 93.0,
+        chapterDurationSeconds = 100.0,
+        settings = settings,
+        playbackSpeed = 1f,
+      ),
+    )
+  }
+
+  @Test
+  fun `skip checks back off while playback is far from skip windows`() {
+    assertEquals(
+      2_000L,
+      resolveSkipCheckIntervalMs(
+        isPlaying = true,
+        chapterPositionSeconds = 45.0,
+        chapterDurationSeconds = 100.0,
+        settings = BookSkipSettings(introSkipSeconds = 10, outroSkipSeconds = 8),
+        playbackSpeed = 1f,
+      ),
+    )
+  }
+
+  @Test
+  fun `skip checks stop while playback is paused`() {
+    assertNull(
+      resolveSkipCheckIntervalMs(
+        isPlaying = false,
+        chapterPositionSeconds = 2.0,
+        chapterDurationSeconds = 100.0,
+        settings = BookSkipSettings(introSkipSeconds = 10, outroSkipSeconds = 8),
+        playbackSpeed = 1f,
+      ),
+    )
+  }
+
+  @Test
+  fun `skip checks become more frequent at higher playback speeds before an outro boundary`() {
+    val settings = BookSkipSettings(introSkipSeconds = 0, outroSkipSeconds = 2)
+
+    val normalSpeedInterval =
+      resolveSkipCheckIntervalMs(
+        isPlaying = true,
+        chapterPositionSeconds = 96.0,
+        chapterDurationSeconds = 100.0,
+        settings = settings,
+        playbackSpeed = 1f,
+      )
+
+    val highSpeedInterval =
+      resolveSkipCheckIntervalMs(
+        isPlaying = true,
+        chapterPositionSeconds = 96.0,
+        chapterDurationSeconds = 100.0,
+        settings = settings,
+        playbackSpeed = 3f,
+      )
+
+    assertEquals(1_000L, normalSpeedInterval)
+    assertEquals(333L, highSpeedInterval)
+  }
+
+  @Test
   fun `outro skip applies once when chapter is near end`() {
     val settings = BookSkipSettings(introSkipSeconds = 0, outroSkipSeconds = 8)
     val mediaItemId = "chapter-2"

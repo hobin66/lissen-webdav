@@ -56,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.LiveData
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.launch
 import org.grakovne.lissen.ui.components.withScrollbar
@@ -284,11 +285,14 @@ fun PlayingQueueComposable(
         state = listState,
       ) {
         itemsIndexed(showingChapters) { index, chapter ->
-          val isCached by cachingModelView
-            .provideCacheState(
-              bookId = book?.id ?: "",
-              chapterId = chapter.id,
-            ).observeAsState(false)
+          val cacheStateLiveData =
+            remember(book?.id, chapter.id) {
+              cachingModelView.provideCacheState(
+                bookId = book?.id.orEmpty(),
+                chapterId = chapter.id,
+              )
+            }
+          val isCached by cacheStateLiveData.observeAsState(false)
 
           PlaylistItemComposable(
             track = chapter,

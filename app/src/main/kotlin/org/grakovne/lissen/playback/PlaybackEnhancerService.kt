@@ -58,23 +58,33 @@ class PlaybackEnhancerService
       enhancer = null
 
       if (sessionId == C.AUDIO_SESSION_ID_UNSET) return
+      if (boost == PlaybackVolumeBoost.DISABLED) return
 
       try {
         enhancer = LoudnessEnhancer(sessionId)
-        updateGain(boost)
+        enhancer?.enabled = true
+        enhancer?.setTargetGain(boostToMb(boost))
       } catch (ex: Exception) {
         Timber.e("Unable to attach LoudnessEnhancer due to ${ex.message}")
       }
     }
 
     private fun updateGain(value: PlaybackVolumeBoost) {
+      updateAudioOffload(value)
+
       try {
         when (value) {
           PlaybackVolumeBoost.DISABLED -> {
             enhancer?.enabled = false
+            enhancer?.release()
+            enhancer = null
           }
 
           else -> {
+            if (enhancer == null && player.audioSessionId != C.AUDIO_SESSION_ID_UNSET) {
+              attachEnhancer(player.audioSessionId, value)
+              return
+            }
             enhancer?.enabled = true
             enhancer?.setTargetGain(boostToMb(value))
           }
@@ -82,6 +92,15 @@ class PlaybackEnhancerService
       } catch (ex: Exception) {
         Timber.e("Unable update volume gain with $value due to: $ex")
       }
+    }
+
+    @OptIn(UnstableApi::class)
+    private fun updateAudioOffload(value: PlaybackVolumeBoost) {
+      player.trackSelectionParameters =
+        player.trackSelectionParameters
+          .buildUpon()
+          .setAudioOffloadPreferences(provideAudioOffloadPreferences(value))
+          .build()
     }
 
     private fun boostToMb(value: PlaybackVolumeBoost): Int =

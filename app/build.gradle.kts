@@ -1,4 +1,8 @@
 import java.util.Properties
+import org.grakovne.lissen.buildlogic.missingRequiredProperties
+import org.grakovne.lissen.buildlogic.requiresReleaseSigning
+import org.grakovne.lissen.buildlogic.resolveGitHash
+import org.grakovne.lissen.buildlogic.runGitShortHead
 
 plugins {
   alias(libs.plugins.android.application)
@@ -16,12 +20,60 @@ kotlinter {
   ignoreLintFailures = false
 }
 
-val localProperties = Properties().apply {
-  rootProject.file("local.properties").takeIf { it.exists() }?.let { file -> file.inputStream().use { load(it) } }
-}
+val versionPropertiesFile = rootProject.file("version.properties")
 
-tasks.named("preBuild") {
-  dependsOn("formatKotlin")
+val versionProperties =
+  Properties().apply {
+    versionPropertiesFile.takeIf { it.exists() }?.inputStream()?.use { load(it) }
+  }
+
+val signingProperties =
+  Properties().apply {
+    rootProject.file("signing.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+  }
+
+fun versionProperty(name: String): String =
+  providers
+    .gradleProperty(name)
+    .orNull
+    ?.takeIf { it.isNotBlank() }
+    ?: versionProperties.getProperty(name)?.takeIf { it.isNotBlank() }
+    ?: error("Missing $name. Provide it via Gradle property or version.properties")
+
+fun signingProperty(name: String): String? =
+  providers
+    .gradleProperty(name)
+    .orNull
+    ?.takeIf { it.isNotBlank() }
+    ?: signingProperties.getProperty(name)?.takeIf { it.isNotBlank() }
+
+val baseVersionName = versionProperty("BASE_VERSION")
+val buildNumber =
+  versionProperty("BUILD_NUMBER").toIntOrNull()
+    ?: error("BUILD_NUMBER must be an integer in version.properties")
+val resolvedVersionName = "$baseVersionName.$buildNumber"
+val hasReleaseSigning =
+  listOf(
+      "RELEASE_STORE_FILE",
+      "RELEASE_STORE_PASSWORD",
+      "RELEASE_KEY_ALIAS",
+      "RELEASE_KEY_PASSWORD",
+    )
+    .all { propertyName -> !signingProperty(propertyName).isNullOrBlank() }
+val missingReleaseSigningProperties =
+  missingRequiredProperties(
+    propertyNames =
+      listOf(
+        "RELEASE_STORE_FILE",
+        "RELEASE_STORE_PASSWORD",
+        "RELEASE_KEY_ALIAS",
+        "RELEASE_KEY_PASSWORD",
+      ),
+    lookup = ::signingProperty,
+  )
+
+tasks.named("check") {
+  dependsOn("lintKotlin")
 }
 
 ksp {
@@ -29,19 +81,38 @@ ksp {
 }
 
 fun gitCommitHash(): String {
-  return try {
-    val process = ProcessBuilder("git", "rev-parse", "--short", "HEAD")
-      .redirectErrorStream(true)
-      .start()
-    process.inputStream.bufferedReader().use { it.readText().trim() }
-  } catch (e: Exception) {
-    "stable"
+  return resolveGitHash(runGitShortHead(rootProject.projectDir))
+}
+
+gradle.taskGraph.whenReady {
+  if (requiresReleaseSigning(allTasks.map { it.name }) && !hasReleaseSigning) {
+    error(
+      buildString {
+        append("Release signing is required for release artifact tasks. ")
+        append("Missing properties: ")
+        append(missingReleaseSigningProperties.joinToString())
+        append(". Provide them via Gradle properties or signing.properties.")
+      },
+    )
   }
 }
 
 android {
   namespace = "org.grakovne.lissen"
   compileSdk = 36
+
+  signingConfigs {
+    if (hasReleaseSigning) {
+      create("release") {
+        storeFile = rootProject.file(signingProperty("RELEASE_STORE_FILE")!!)
+        storePassword = signingProperty("RELEASE_STORE_PASSWORD")
+        keyAlias = signingProperty("RELEASE_KEY_ALIAS")
+        keyPassword = signingProperty("RELEASE_KEY_PASSWORD")
+        enableV1Signing = true
+        enableV2Signing = true
+      }
+    }
+  }
   
   lint {
     disable.add("MissingTranslation")
@@ -53,35 +124,23 @@ android {
     applicationId = "org.grakovne.lissen"
     minSdk = 28
     targetSdk = 36
-    versionCode = 10906
-    versionName = "1.9.6-$commitHash"
+    versionCode = buildNumber
+    versionName = resolvedVersionName
     
     buildConfigField("String", "GIT_HASH", "\"$commitHash\"")
+    buildConfigField("String", "APP_VERSION_NAME", "\"$resolvedVersionName\"")
     
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    
-    if (project.hasProperty("RELEASE_STORE_FILE")) {
-      signingConfigs {
-        create("release") {
-          storeFile = file(project.property("RELEASE_STORE_FILE")!!)
-          storePassword = project.property("RELEASE_STORE_PASSWORD") as String?
-          keyAlias = project.property("RELEASE_KEY_ALIAS") as String?
-          keyPassword = project.property("RELEASE_KEY_PASSWORD") as String?
-          enableV1Signing = true
-          enableV2Signing = true
-        }
-      }
-    }
   }
 
   
   buildTypes {
     release {
-      if (project.hasProperty("RELEASE_STORE_FILE")) {
+      if (hasReleaseSigning) {
         signingConfig = signingConfigs.getByName("release")
       }
-      isMinifyEnabled = false
-      isShrinkResources = false
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(
         getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
       )
@@ -103,7 +162,20 @@ android {
     buildConfig = true
     compose = true
   }
+  splits {
+    abi {
+      isEnable = true
+      reset()
+      include("arm64-v8a", "x86_64")
+      isUniversalApk = false
+    }
+  }
   packaging {
+    jniLibs {
+      // WSA and some sideload installers are more reliable when native libraries
+      // are stored with legacy packaging and extracted during install.
+      useLegacyPackaging = true
+    }
     resources {
       excludes += "/META-INF/{AL2.0,LGPL2.1,MIT}"
     }

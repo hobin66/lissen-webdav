@@ -33,6 +33,7 @@ import org.grakovne.lissen.playback.service.canRestoreFromOverallProgress
 import org.grakovne.lissen.playback.service.shouldUpdateRecentPlaybackSummary
 import timber.log.Timber
 import java.io.File
+import java.util.LinkedHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -48,6 +49,10 @@ class LissenMediaProvider
   ) {
     private val _remoteRefreshVersion = MutableStateFlow(0L)
     val remoteRefreshVersion = _remoteRefreshVersion.asStateFlow()
+    private val remoteFileUriCache =
+      object : LinkedHashMap<String, Uri>(FILE_URI_CACHE_SIZE, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Uri>?): Boolean = size > FILE_URI_CACHE_SIZE
+      }
 
     suspend fun dropBookmark(bookmark: Bookmark) = cachedBookmarkProvider.dropBookmark(bookmark = bookmark)
 
@@ -85,23 +90,24 @@ class LissenMediaProvider
     ): OperationResult<Uri> {
       Timber.d("Fetching File $libraryItemId and $chapterId URI")
 
-      return when (preferences.isForceCache()) {
-        true -> {
-          localCacheRepository
-            .provideFileUri(libraryItemId, chapterId)
-            ?.let { OperationResult.Success(it) }
-            ?: OperationResult.Error(OperationError.InternalError)
+      val result =
+        when (preferences.isForceCache()) {
+          true -> {
+            localCacheRepository
+              .provideFileUri(libraryItemId, chapterId)
+              ?.let { OperationResult.Success(it) }
+              ?: OperationResult.Error(OperationError.InternalError)
+          }
+
+          false -> {
+            localCacheRepository
+              .provideFileUri(libraryItemId, chapterId)
+              ?.let { OperationResult.Success(it) }
+              ?: provideRemoteFileUri(libraryItemId, chapterId)
+          }
         }
 
-        false -> {
-          localCacheRepository
-            .provideFileUri(libraryItemId, chapterId)
-            ?.let { OperationResult.Success(it) }
-            ?: providePreferredChannel()
-              .provideFileUri(libraryItemId, chapterId)
-              .let { OperationResult.Success(it) }
-        }
-      }
+      return result
     }
 
     suspend fun persistPlaybackSnapshot(
@@ -530,4 +536,46 @@ class LissenMediaProvider
     fun provideAuthService(): ChannelAuthService = channelProvider.provideChannelAuth()
 
     fun providePreferredChannel(): MediaChannel = channelProvider.provideMediaChannel()
+
+    private fun provideRemoteFileUri(
+      libraryItemId: String,
+      chapterId: String,
+    ): OperationResult<Uri> {
+      val cacheKey = remoteFileUriCacheKey(libraryItemId, chapterId)
+
+      synchronized(remoteFileUriCache) {
+        remoteFileUriCache[cacheKey]?.let { return OperationResult.Success(it) }
+      }
+
+      val result =
+        providePreferredChannel()
+          .provideFileUri(libraryItemId, chapterId)
+          .let { OperationResult.Success(it) }
+
+      if (result.data != Uri.EMPTY) {
+        synchronized(remoteFileUriCache) {
+          remoteFileUriCache[cacheKey] = result.data
+        }
+      }
+
+      return result
+    }
+
+    private fun remoteFileUriCacheKey(
+      libraryItemId: String,
+      chapterId: String,
+    ): String =
+      buildString {
+        append(preferences.getHost().orEmpty())
+        append("::")
+        append(preferences.getWebdavRoot().orEmpty())
+        append("::")
+        append(libraryItemId)
+        append("::")
+        append(chapterId)
+      }
+
+    companion object {
+      private const val FILE_URI_CACHE_SIZE = 256
+    }
   }

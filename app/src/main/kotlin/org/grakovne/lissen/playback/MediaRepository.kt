@@ -22,9 +22,7 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.MoreExecutors
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -44,6 +42,7 @@ import org.grakovne.lissen.lib.domain.TimerOption
 import org.grakovne.lissen.persistence.preferences.LissenSharedPreferences
 import org.grakovne.lissen.playback.service.PlaybackService
 import org.grakovne.lissen.playback.service.PlaybackService.Companion.ACTION_SEEK_TO
+import org.grakovne.lissen.playback.service.PlaybackService.Companion.CHAPTER_START_MS
 import org.grakovne.lissen.playback.service.PlaybackService.Companion.PLAYBACK_READY
 import org.grakovne.lissen.playback.service.PlaybackService.Companion.POSITION
 import org.grakovne.lissen.playback.service.PlaybackService.Companion.TIMER_EXPIRED
@@ -135,6 +134,16 @@ class MediaRepository
     val currentChapterDuration: LiveData<Double> = _currentChapterDuration
 
     private val handler = Handler(Looper.getMainLooper())
+    private val progressUpdateRunnable =
+      object : Runnable {
+        override fun run() {
+          val updateIntervalMs = resolvePlaybackProgressUpdateIntervalMs(_isPlaying.value == true) ?: return
+          val detailedItem = _playingBook.value ?: return
+
+          updateProgress(detailedItem)
+          handler.postDelayed(this, updateIntervalMs)
+        }
+      }
 
     init {
       val controllerBuilder = MediaController.Builder(context, token)
@@ -162,6 +171,7 @@ class MediaRepository
               object : Player.Listener {
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                   _isPlaying.value = isPlaying
+                  updateProgressLoop(isPlaying)
                 }
 
                 override fun onMediaItemTransition(
@@ -177,8 +187,17 @@ class MediaRepository
                   }
                 }
 
+                override fun onPositionDiscontinuity(
+                  oldPosition: Player.PositionInfo,
+                  newPosition: Player.PositionInfo,
+                  reason: Int,
+                ) {
+                  syncPlaybackProgressAfterPositionChange()
+                }
+
                 override fun onPlaybackStateChanged(playbackState: Int) {
                   if (playbackState == Player.STATE_ENDED) {
+                    updateProgressLoop(false)
                     if (shouldAdjustCurrentItemSleepTimer(_timerOption.value, sleepTimerStage)) {
                       updateTimer(timerOption = null)
                     }
@@ -210,8 +229,8 @@ class MediaRepository
 
             book?.let {
               CoroutineScope(Dispatchers.Main).launch {
-                updateProgress(book).await()
-                startUpdatingProgress(book)
+                updateProgress(book)
+                updateProgressLoop(mediaController.isPlaying)
                 _isPlaybackReady.postValue(true)
 
                 if (_playAfterPrepare.value == true) {
@@ -559,20 +578,6 @@ class MediaRepository
       context.startService(intent)
     }
 
-    private fun startUpdatingProgress(detailedItem: DetailedItem) {
-      handler.removeCallbacksAndMessages(null)
-
-      handler.postDelayed(
-        object : Runnable {
-          override fun run() {
-            updateProgress(detailedItem)
-            handler.postDelayed(this, 500)
-          }
-        },
-        500,
-      )
-    }
-
     fun clearPreparedItem() {
       timerOption
         .value
@@ -612,17 +617,62 @@ class MediaRepository
       }
     }
 
-    private fun updateProgress(detailedItem: DetailedItem): Deferred<Unit> =
-      CoroutineScope(Dispatchers.Main).async {
-        val currentIndex = mediaController.currentMediaItemIndex
-        val accumulated =
-          detailedItem.chapters
-            .take(currentIndex)
-            .sumOf { duration -> duration.duration.takeIf { it > 0.0 } ?: 0.0 }
-        val currentFilePosition = mediaController.currentPosition / 1000.0
+    private fun updateProgress(detailedItem: DetailedItem) {
+      val nextTotalPosition = resolveCurrentTotalPositionSeconds(detailedItem) ?: return
+      postIfChanged(_totalPosition, nextTotalPosition)
+    }
 
-        _totalPosition.postValue(accumulated + currentFilePosition)
+    private fun updateProgressLoop(isPlaying: Boolean) {
+      handler.removeCallbacks(progressUpdateRunnable)
+
+      resolvePlaybackProgressUpdateIntervalMs(isPlaying)?.let { updateIntervalMs ->
+        handler.postDelayed(progressUpdateRunnable, updateIntervalMs)
       }
+    }
+
+    private fun syncPlaybackProgressAfterPositionChange() {
+      val detailedItem = _playingBook.value ?: return
+      val nextTotalPosition = resolveCurrentTotalPositionSeconds(detailedItem) ?: return
+
+      if (
+        shouldRefreshPlaybackProgressOnPositionDiscontinuity(
+          isPlaying = _isPlaying.value == true,
+          previousTotalPositionSeconds = _totalPosition.value,
+          currentTotalPositionSeconds = nextTotalPosition,
+        )
+      ) {
+        postIfChanged(_totalPosition, nextTotalPosition)
+      }
+    }
+
+    private fun resolveCurrentTotalPositionSeconds(detailedItem: DetailedItem): Double? {
+      val currentTotalPosition =
+        resolveTotalPositionSeconds(
+          chapterStartOffsetMs =
+            mediaController.currentMediaItem
+              ?.mediaMetadata
+              ?.extras
+              ?.getLong(CHAPTER_START_MS, -1)
+              ?.takeIf { it >= 0L },
+          chapterPositionMs = mediaController.currentPosition,
+        )
+
+      return currentTotalPosition
+        ?: run {
+          val currentIndex = mediaController.currentMediaItemIndex
+          if (currentIndex < 0) {
+            return null
+          }
+
+          val accumulated =
+            detailedItem.chapters
+              .take(currentIndex)
+              .sumOf { duration -> duration.duration.takeIf { it > 0.0 } ?: 0.0 }
+          val currentFilePosition = mediaController.currentPosition / 1000.0
+
+          accumulated + currentFilePosition
+        }
+    }
 
     private fun play() {
       val intent =
@@ -822,13 +872,11 @@ class MediaRepository
 
           false -> {
             val totalPosition = totalPosition.value ?: return
-            calculateChapterIndex(book, totalPosition) to calculateChapterPosition(book, totalPosition)
+            calculateChapterIndexAndPosition(book, totalPosition).let { it.index to it.position }
           }
         }
 
-      _currentChapterIndex.postValue(trackIndex)
-      _currentChapterPosition.postValue(trackPosition)
-      _currentChapterDuration.postValue(
+      val nextDuration =
         book
           .chapters
           .getOrNull(trackIndex)
@@ -838,8 +886,11 @@ class MediaRepository
             true -> mediaController.duration.takeIf { it > 0 }?.div(1000.0)
             false -> null
           }
-          ?: 0.0,
-      )
+          ?: 0.0
+
+      postIfChanged(_currentChapterIndex, trackIndex)
+      postIfChanged(_currentChapterPosition, trackPosition)
+      postIfChanged(_currentChapterDuration, nextDuration)
     }
 
     private fun usesDirectFileQueue(book: DetailedItem): Boolean =
@@ -951,6 +1002,15 @@ class MediaRepository
         OperationError.ConflictError -> R.string.login_error_metadata_conflict
         else -> R.string.player_skip_save_failed
       }
+
+    private fun <T> postIfChanged(
+      liveData: MutableLiveData<T>,
+      value: T,
+    ) {
+      if (liveData.value != value) {
+        liveData.postValue(value)
+      }
+    }
   }
 
 enum class ScrollingDirection {

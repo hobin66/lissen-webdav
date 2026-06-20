@@ -50,6 +50,17 @@ nano local.properties
 ```
 5. Build and run the app on an Android device or emulator.
 
+### ABI Packaging
+
+This repository now ships split APKs for `arm64-v8a` and `x86_64` only.
+
+Run the Node packaging script to bump the build number, build release APKs, and archive them:
+```
+node build-apks.js
+```
+
+Artifacts are copied into `packages/<version>/` with one APK per ABI.
+
 ### Localization
 
 Help us translate Lissen into more languages! We use [Weblate](https://hosted.weblate.org/engage/lissen/) to manage translations.

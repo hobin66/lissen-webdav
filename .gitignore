@@ -26,6 +26,7 @@ render.experimental.xml
 # Keystore files
 *.jks
 *.keystore
+signing.properties
 
 # Google Services (e.g. APIs or Firebase)
 google-services.json
@@ -36,6 +37,10 @@ google-services.json
 # Local runtime data
 lissen_local_cache_storage.db
 lissen_local_cache_storage.db-*
+
+# Packaged APK artifacts
+packages/*
+!packages/.gitkeep
 
 wechat
 

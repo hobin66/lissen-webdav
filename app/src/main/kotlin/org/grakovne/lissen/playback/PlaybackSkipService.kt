@@ -26,6 +26,7 @@ class PlaybackSkipService
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private var watchJob: Job? = null
+    private var lastWatchIntervalMs: Long? = null
     private var lastAppliedIntroMediaItemId: String? = null
     private var lastAppliedOutroMediaItemId: String? = null
     private var pendingDirectIntroTimerReschedule: PendingDirectIntroTimerReschedule? = null
@@ -88,30 +89,62 @@ class PlaybackSkipService
     }
 
     private fun updateWatchLoop() {
-      if (exoPlayer.isPlaying) {
-        if (watchJob?.isActive == true) {
+      val currentBook =
+        resolveCurrentBook()
+          ?: run {
+            cancelWatchLoop()
+            return
+          }
+      val settings = resolveSettings(currentBook)
+      val watchIntervalMs =
+        resolveSkipCheckIntervalMs(
+          isPlaying = exoPlayer.isPlaying,
+          chapterPositionSeconds = exoPlayer.currentPosition.coerceAtLeast(0L) / 1000.0,
+          chapterDurationSeconds = exoPlayer.duration.takeIf { it > 0L }?.div(1000.0),
+          settings = settings,
+          playbackSpeed = exoPlayer.playbackParameters.speed,
+        ) ?: run {
+          cancelWatchLoop()
           return
         }
 
-        watchJob =
-          serviceScope
-            .launch {
-              while (exoPlayer.isPlaying) {
-                evaluateSkip()
-                delay(SKIP_CHECK_INTERVAL_MS)
-              }
-            }.also { job ->
-              job.invokeOnCompletion {
-                if (watchJob === job) {
-                  watchJob = null
-                }
-              }
-            }
+      if (watchJob?.isActive == true && lastWatchIntervalMs == watchIntervalMs) {
         return
       }
 
       watchJob?.cancel()
-      watchJob = null
+      lastWatchIntervalMs = watchIntervalMs
+
+      watchJob =
+        serviceScope
+          .launch {
+            while (exoPlayer.isPlaying) {
+              evaluateSkip()
+
+              val dynamicIntervalMs =
+                resolveCurrentBook()
+                  ?.let(::resolveSettings)
+                  ?.let { updatedSettings ->
+                    resolveSkipCheckIntervalMs(
+                      isPlaying = exoPlayer.isPlaying,
+                      chapterPositionSeconds = exoPlayer.currentPosition.coerceAtLeast(0L) / 1000.0,
+                      chapterDurationSeconds = exoPlayer.duration.takeIf { it > 0L }?.div(1000.0),
+                      settings = updatedSettings,
+                      playbackSpeed = exoPlayer.playbackParameters.speed,
+                    )
+                  } ?: break
+
+              lastWatchIntervalMs = dynamicIntervalMs
+              delay(dynamicIntervalMs)
+            }
+          }.also { job ->
+            job.invokeOnCompletion {
+              if (watchJob === job) {
+                watchJob = null
+                lastWatchIntervalMs = null
+              }
+            }
+          }
     }
 
     private fun evaluateSkip() {
@@ -121,10 +154,7 @@ class PlaybackSkipService
 
       val currentMediaItem = exoPlayer.currentMediaItem ?: return
       val playbackBook = currentMediaItem.localConfiguration?.tag as? DetailedItem ?: return
-      val currentBook =
-        mediaRepository.playingBook.value
-          ?.takeIf { it.id == playbackBook.id }
-          ?: playbackBook
+      val currentBook = resolveCurrentBook(playbackBook) ?: return
       val currentMediaItemId = currentMediaItem.mediaId
       val chapterPositionSeconds = exoPlayer.currentPosition.coerceAtLeast(0L) / 1000.0
       val playerChapterDurationSeconds = exoPlayer.duration.takeIf { it > 0L }?.div(1000.0)
@@ -250,6 +280,22 @@ class PlaybackSkipService
       pendingDirectIntroTimerReschedule = null
     }
 
+    private fun resolveCurrentBook(
+      playbackBook: DetailedItem? = exoPlayer.currentMediaItem?.localConfiguration?.tag as? DetailedItem,
+    ): DetailedItem? {
+      val currentPlaybackBook = playbackBook ?: return null
+
+      return mediaRepository.playingBook.value
+        ?.takeIf { it.id == currentPlaybackBook.id }
+        ?: currentPlaybackBook
+    }
+
+    private fun cancelWatchLoop() {
+      watchJob?.cancel()
+      watchJob = null
+      lastWatchIntervalMs = null
+    }
+
     private fun resetAppliedSkipsForMediaItem(mediaItemId: String?) {
       val targetMediaItemId = mediaItemId ?: return
 
@@ -316,8 +362,6 @@ class PlaybackSkipService
     private fun Double.secondsToMillis(): Long = (coerceAtLeast(0.0) * 1000).toLong()
 
     private companion object {
-      private const val SKIP_CHECK_INTERVAL_MS = 250L
-
       private val skipEvents =
         listOf(
           Player.EVENT_IS_PLAYING_CHANGED,

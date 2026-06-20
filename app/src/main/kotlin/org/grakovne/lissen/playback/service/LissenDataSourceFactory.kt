@@ -24,32 +24,52 @@ class LissenDataSourceFactory(
         createOkHttpClient(preferences = sharedPreferences),
       )
   }
-	
+
   private val defaultFactory by lazy { DefaultDataSource.Factory(baseContext, upstreamFactory) }
 
   override fun createDataSource(): DataSource {
     val actualDataSource = defaultFactory.createDataSource()
-		
+
     return object : DataSource by actualDataSource {
       override fun open(dataSpec: DataSpec): Long {
-        val (itemId, fileId) = unapply(dataSpec.uri) ?: return 0
-				
-        val resolvedUri =
-          mediaProvider
-            .provideFileUri(itemId, fileId)
-            .fold(
-              onSuccess = { it },
-              onFailure = { dataSpec.uri },
-            )
+        val originalUri = dataSpec.uri
+        val resolution = resolvePlaybackUri(originalUri)
+        val resolvedUri = resolution?.resolvedUri ?: originalUri
 
-        Timber.d("Resolved Uri: $resolvedUri for itemId = $itemId and fileId = $fileId")
-				
+        resolution?.let {
+          Timber.d("Resolved Uri: %s for itemId=%s fileId=%s", resolvedUri, it.itemId, it.fileId)
+        }
+
         return dataSpec
           .buildUpon()
           .setUri(resolvedUri)
           .build()
           .let { actualDataSource.open(it) }
       }
+
+      private fun resolvePlaybackUri(uri: android.net.Uri): ResolvedPlaybackUri? {
+        val (itemId, fileId) = unapply(uri) ?: return null
+
+        val resolvedUri =
+          mediaProvider
+            .provideFileUri(itemId, fileId)
+            .fold(
+              onSuccess = { it },
+              onFailure = { uri },
+            )
+
+        return ResolvedPlaybackUri(
+          itemId = itemId,
+          fileId = fileId,
+          resolvedUri = resolvedUri,
+        )
+      }
     }
   }
+
+  private data class ResolvedPlaybackUri(
+    val itemId: String,
+    val fileId: String,
+    val resolvedUri: android.net.Uri,
+  )
 }

@@ -1,6 +1,7 @@
 package org.grakovne.lissen.playback
 
 import android.content.Context
+import android.os.PowerManager
 import android.widget.Toast
 import android.widget.Toast.LENGTH_SHORT
 import androidx.annotation.OptIn
@@ -58,6 +59,8 @@ object MediaModule {
         .Builder(context)
         .setHandleAudioBecomingNoisy(true)
         .setAudioAttributes(providePlaybackAudioAttributes(), true)
+        .setWakeMode(PowerManager.PARTIAL_WAKE_LOCK)
+        .experimentalSetDynamicSchedulingEnabled(true)
         .setRenderersFactory(renderersFactory)
         .setMediaSourceFactory(
           LissenMediaSourceFactory(
@@ -75,7 +78,7 @@ object MediaModule {
     player.trackSelectionParameters =
       player.trackSelectionParameters
         .buildUpon()
-        .setAudioOffloadPreferences(provideAudioOffloadPreferences())
+        .setAudioOffloadPreferences(provideAudioOffloadPreferences(sharedPreferences.getPlaybackVolumeBoost()))
         .build()
 
     player.addAnalyticsListener(mediaCodecListener(context))

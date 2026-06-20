@@ -3,6 +3,10 @@ package org.grakovne.lissen.playback
 import org.grakovne.lissen.lib.domain.DetailedItem
 import org.grakovne.lissen.lib.domain.TimerOption
 
+private const val ACTIVE_SKIP_CHECK_INTERVAL_MS = 250L
+private const val IDLE_SKIP_CHECK_INTERVAL_MS = 2_000L
+private const val SKIP_WINDOW_PADDING_SECONDS = 1.0
+
 fun shouldApplyIntroSkip(
   settings: BookSkipSettings,
   chapterPositionSeconds: Double,
@@ -23,6 +27,94 @@ fun shouldApplyIntroSkip(
 }
 
 fun shouldEvaluateBookSkip(isPlaying: Boolean): Boolean = isPlaying
+
+fun resolveSkipCheckIntervalMs(
+  isPlaying: Boolean,
+  chapterPositionSeconds: Double,
+  chapterDurationSeconds: Double?,
+  settings: BookSkipSettings,
+  playbackSpeed: Float,
+): Long? {
+  if (!isPlaying) {
+    return null
+  }
+
+  val safePlaybackSpeed = playbackSpeed.takeIf { it > 0f } ?: 1f
+
+  val safePosition = chapterPositionSeconds.coerceAtLeast(0.0)
+  val introWindowUpperBound = settings.normalizedIntroSkipSeconds + SKIP_WINDOW_PADDING_SECONDS
+  if (settings.normalizedIntroSkipSeconds > 0 && safePosition <= introWindowUpperBound) {
+    return ACTIVE_SKIP_CHECK_INTERVAL_MS
+  }
+
+  val safeDuration = chapterDurationSeconds?.takeIf { it > 0.0 }
+  if (safeDuration != null && settings.normalizedOutroSkipSeconds > 0) {
+    val remainingSeconds = (safeDuration - safePosition).coerceAtLeast(0.0)
+    val outroWindowUpperBound = settings.normalizedOutroSkipSeconds + SKIP_WINDOW_PADDING_SECONDS
+    if (remainingSeconds <= outroWindowUpperBound) {
+      return ACTIVE_SKIP_CHECK_INTERVAL_MS
+    }
+  }
+
+  return resolveAdaptiveIdleSkipCheckIntervalMs(
+    chapterPositionSeconds = safePosition,
+    chapterDurationSeconds = chapterDurationSeconds,
+    settings = settings,
+    playbackSpeed = safePlaybackSpeed,
+  )
+}
+
+private fun resolveAdaptiveIdleSkipCheckIntervalMs(
+  chapterPositionSeconds: Double,
+  chapterDurationSeconds: Double?,
+  settings: BookSkipSettings,
+  playbackSpeed: Float,
+): Long =
+  buildList {
+  val introThresholdSeconds = settings.normalizedIntroSkipSeconds.toDouble()
+  if (introThresholdSeconds > 0.0 && chapterPositionSeconds < introThresholdSeconds) {
+    val secondsUntilIntroBoundary = (introThresholdSeconds - chapterPositionSeconds).coerceAtLeast(0.0)
+      add(
+        adaptiveSkipIntervalMs(
+          secondsUntilBoundary = secondsUntilIntroBoundary,
+          skipWindowSeconds = introThresholdSeconds,
+          playbackSpeed = playbackSpeed,
+        ),
+      )
+  }
+
+  val safeDuration = chapterDurationSeconds?.takeIf { it > 0.0 }
+  val outroThresholdSeconds = settings.normalizedOutroSkipSeconds.toDouble()
+  if (safeDuration != null && outroThresholdSeconds > 0.0) {
+    val secondsUntilOutroBoundary = (safeDuration - outroThresholdSeconds - chapterPositionSeconds).coerceAtLeast(0.0)
+      add(
+        adaptiveSkipIntervalMs(
+          secondsUntilBoundary = secondsUntilOutroBoundary,
+          skipWindowSeconds = outroThresholdSeconds,
+          playbackSpeed = playbackSpeed,
+        ),
+      )
+  }
+}.minOrNull() ?: IDLE_SKIP_CHECK_INTERVAL_MS
+
+private fun adaptiveSkipIntervalMs(
+  secondsUntilBoundary: Double,
+  skipWindowSeconds: Double,
+  playbackSpeed: Float,
+): Long {
+  val realTimeUntilBoundaryMs = ((secondsUntilBoundary / playbackSpeed.toDouble()) * 1000.0).toLong().coerceAtLeast(0L)
+  val realTimeSkipWindowMs =
+    ((skipWindowSeconds / playbackSpeed.toDouble()) * 1000.0).toLong().coerceAtLeast(ACTIVE_SKIP_CHECK_INTERVAL_MS)
+
+  if (realTimeUntilBoundaryMs > IDLE_SKIP_CHECK_INTERVAL_MS + realTimeSkipWindowMs) {
+    return IDLE_SKIP_CHECK_INTERVAL_MS
+  }
+
+  val distanceIntervalMs = maxOf(ACTIVE_SKIP_CHECK_INTERVAL_MS, realTimeUntilBoundaryMs / 2)
+  val windowIntervalMs = maxOf(ACTIVE_SKIP_CHECK_INTERVAL_MS, realTimeSkipWindowMs / 2)
+
+  return minOf(IDLE_SKIP_CHECK_INTERVAL_MS, distanceIntervalMs, windowIntervalMs)
+}
 
 fun shouldApplyOutroSkip(
   settings: BookSkipSettings,
