@@ -1,0 +1,559 @@
+package io.github.hobin66.webdavplayer.persistence.preferences
+
+import android.content.Context
+import android.content.SharedPreferences
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import androidx.core.content.edit
+import com.squareup.moshi.Types
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import io.github.hobin66.webdavplayer.common.ColorScheme
+import io.github.hobin66.webdavplayer.common.LibraryOrderingConfiguration
+import io.github.hobin66.webdavplayer.common.NetworkTypeAutoCache
+import io.github.hobin66.webdavplayer.common.PlaybackVolumeBoost
+import io.github.hobin66.webdavplayer.common.moshi
+import io.github.hobin66.webdavplayer.lib.domain.DetailedItem
+import io.github.hobin66.webdavplayer.lib.domain.DownloadOption
+import io.github.hobin66.webdavplayer.lib.domain.DurationTimerStopMode
+import io.github.hobin66.webdavplayer.lib.domain.Library
+import io.github.hobin66.webdavplayer.lib.domain.LibraryType
+import io.github.hobin66.webdavplayer.lib.domain.RecentBook
+import io.github.hobin66.webdavplayer.lib.domain.SeekTime
+import io.github.hobin66.webdavplayer.lib.domain.makeDownloadOption
+import io.github.hobin66.webdavplayer.lib.domain.makeId
+import io.github.hobin66.webdavplayer.playback.MediaCodecQueueingMode
+import io.github.hobin66.webdavplayer.playback.service.PlaybackSnapshotRecord
+import java.security.KeyStore
+import java.util.UUID
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
+import javax.inject.Inject
+import javax.inject.Singleton
+
+@Singleton
+class WebdavPlayerPreferences
+  @Inject
+  constructor(
+    @ApplicationContext context: Context,
+  ) {
+    private val sharedPreferences: SharedPreferences =
+      context.getSharedPreferences("webdav_player_secure_prefs", Context.MODE_PRIVATE)
+
+    fun hasCredentials(): Boolean {
+      val host = getHost()
+      val username = getUsername()
+      val password = getPassword()
+      val webdavRoot = getWebdavRoot()
+
+      return try {
+        host != null && username != null && password != null && webdavRoot != null
+      } catch (ex: Exception) {
+        false
+      }
+    }
+
+    fun clearCredentials() {
+      sharedPreferences.edit {
+        remove(KEY_PASSWORD)
+      }
+    }
+
+    fun clearPreferences() {
+      sharedPreferences.edit {
+        remove(KEY_HOST)
+        remove(KEY_USERNAME)
+        remove(KEY_WEBDAV_ROOT)
+        remove(KEY_PASSWORD)
+
+        remove(KEY_SERVER_VERSION)
+
+        remove(CACHE_FORCE_ENABLED)
+
+        remove(KEY_PREFERRED_LIBRARY_ID)
+        remove(KEY_PREFERRED_LIBRARY_NAME)
+        remove(KEY_PREFERRED_LIBRARY_TYPE)
+
+        remove(KEY_PLAYING_ITEM)
+        remove(KEY_RECENT_BOOKS)
+        remove(KEY_PLAYBACK_SNAPSHOTS)
+        remove(KEY_PREFERRED_SLEEP_TIMER_STOP_MODE)
+      }
+    }
+
+    fun getAutoDownloadDelayed() = sharedPreferences.getBoolean(KEY_AUTO_DOWNLOAD_DELAYED, false)
+
+    fun saveAutoDownloadDelayed(enabled: Boolean) {
+      sharedPreferences.edit {
+        putBoolean(KEY_AUTO_DOWNLOAD_DELAYED, enabled)
+      }
+    }
+
+    fun saveHost(host: String) = sharedPreferences.edit { putString(KEY_HOST, host) }
+
+    fun getHost(): String? = sharedPreferences.getString(KEY_HOST, null)
+
+    fun saveWebdavRoot(root: String) = sharedPreferences.edit { putString(KEY_WEBDAV_ROOT, root) }
+
+    fun getWebdavRoot(): String? = sharedPreferences.getString(KEY_WEBDAV_ROOT, null)
+
+    fun getDeviceId(): String {
+      val existingDeviceId = sharedPreferences.getString(KEY_DEVICE_ID, null)
+
+      if (existingDeviceId != null) {
+        return existingDeviceId
+      }
+
+      return UUID
+        .randomUUID()
+        .toString()
+        .also { sharedPreferences.edit { putString(KEY_DEVICE_ID, it) } }
+    }
+
+    fun getPreferredLibrary(): Library? {
+      val id = getPreferredLibraryId() ?: return null
+      val name = getPreferredLibraryName() ?: return null
+
+      val type = getPreferredLibraryType()
+
+      return Library(
+        id = id,
+        title = name,
+        type = type,
+      )
+    }
+
+    fun savePreferredLibrary(library: Library) {
+      saveActiveLibraryId(library.id)
+      saveActiveLibraryName(library.title)
+      saveActiveLibraryType(library.type)
+    }
+
+    fun saveLibraryOrdering(configuration: LibraryOrderingConfiguration) {
+      val adapter = moshi.adapter(LibraryOrderingConfiguration::class.java)
+
+      val json = adapter.toJson(configuration)
+      sharedPreferences.edit {
+        putString(KEY_PREFERRED_LIBRARY_ORDERING, json)
+      }
+    }
+
+    fun getLibraryOrdering(): LibraryOrderingConfiguration {
+      val json = sharedPreferences.getString(KEY_PREFERRED_LIBRARY_ORDERING, null)
+      return when (json) {
+        null -> {
+          LibraryOrderingConfiguration.default
+        }
+
+        else -> {
+          val adapter = moshi.adapter(LibraryOrderingConfiguration::class.java)
+          adapter.fromJson(json) ?: LibraryOrderingConfiguration.default
+        }
+      }
+    }
+
+    fun savePlaybackVolumeBoost(playbackVolumeBoost: PlaybackVolumeBoost) =
+      sharedPreferences.edit {
+        putString(KEY_VOLUME_BOOST, playbackVolumeBoost.name)
+      }
+
+    fun getPlaybackVolumeBoost(): PlaybackVolumeBoost =
+      sharedPreferences
+        .getString(KEY_VOLUME_BOOST, PlaybackVolumeBoost.DISABLED.name)
+        ?.let { PlaybackVolumeBoost.valueOf(it) }
+        ?: PlaybackVolumeBoost.DISABLED
+
+    fun saveAutoDownloadNetworkType(networkTypeAutoCache: NetworkTypeAutoCache) =
+      sharedPreferences.edit {
+        putString(KEY_PREFERRED_AUTO_DOWNLOAD_NETWORK_TYPE, networkTypeAutoCache.name)
+      }
+
+    fun getAutoDownloadNetworkType(): NetworkTypeAutoCache =
+      sharedPreferences
+        .getString(KEY_PREFERRED_AUTO_DOWNLOAD_NETWORK_TYPE, NetworkTypeAutoCache.WIFI_ONLY.name)
+        ?.let { NetworkTypeAutoCache.valueOf(it) }
+        ?: NetworkTypeAutoCache.WIFI_ONLY
+
+    fun saveColorScheme(colorScheme: ColorScheme) =
+      sharedPreferences.edit {
+        putString(KEY_PREFERRED_COLOR_SCHEME, colorScheme.name)
+      }
+
+    fun getColorScheme(): ColorScheme =
+      sharedPreferences
+        .getString(KEY_PREFERRED_COLOR_SCHEME, ColorScheme.FOLLOW_SYSTEM.name)
+        ?.let { ColorScheme.valueOf(it) }
+        ?: ColorScheme.FOLLOW_SYSTEM
+
+    fun saveMaterialYouColors(enabled: Boolean) =
+      sharedPreferences.edit {
+        putBoolean(KEY_MATERIAL_YOU_ENABLED, enabled)
+      }
+
+    fun getMaterialYouColors() = sharedPreferences.getBoolean(KEY_MATERIAL_YOU_ENABLED, false)
+
+    fun saveAutoDownloadOption(option: DownloadOption?) =
+      sharedPreferences.edit {
+        putString(KEY_PREFERRED_AUTO_DOWNLOAD, option?.makeId())
+      }
+
+    fun getAutoDownloadOption(): DownloadOption? =
+      sharedPreferences
+        .getString(KEY_PREFERRED_AUTO_DOWNLOAD, null)
+        ?.makeDownloadOption()
+
+    fun savePlaybackSpeed(factor: Float) = sharedPreferences.edit { putFloat(KEY_PREFERRED_PLAYBACK_SPEED, factor) }
+
+    fun getPlaybackSpeed(): Float = sharedPreferences.getFloat(KEY_PREFERRED_PLAYBACK_SPEED, 1f)
+
+    fun savePreferredSleepTimerStopMode(stopMode: DurationTimerStopMode) =
+      sharedPreferences.edit {
+        putString(KEY_PREFERRED_SLEEP_TIMER_STOP_MODE, stopMode.name)
+      }
+
+    fun getPreferredSleepTimerStopMode(): DurationTimerStopMode =
+      sharedPreferences
+        .getString(KEY_PREFERRED_SLEEP_TIMER_STOP_MODE, DurationTimerStopMode.IMMEDIATE.name)
+        ?.let { DurationTimerStopMode.valueOf(it) }
+        ?: DurationTimerStopMode.IMMEDIATE
+
+    private fun <T> asFlow(
+      key: String,
+      getter: () -> T,
+    ): Flow<T> =
+      callbackFlow {
+        val listener =
+          SharedPreferences.OnSharedPreferenceChangeListener { _, changeKey ->
+            if (changeKey == key) {
+              trySend(getter())
+            }
+          }
+        sharedPreferences.registerOnSharedPreferenceChangeListener(listener)
+        trySend(getter())
+        awaitClose { sharedPreferences.unregisterOnSharedPreferenceChangeListener(listener) }
+      }.distinctUntilChanged()
+
+    val playingItemFlow = asFlow(KEY_PLAYING_ITEM, ::getPlayingItem)
+
+    val playbackVolumeBoostFlow = asFlow(KEY_VOLUME_BOOST, ::getPlaybackVolumeBoost)
+
+    val colorSchemeFlow = asFlow(KEY_PREFERRED_COLOR_SCHEME, ::getColorScheme)
+
+    val materialYouFlow = asFlow(KEY_MATERIAL_YOU_ENABLED, ::getMaterialYouColors)
+
+    val forceCacheFlow = asFlow(CACHE_FORCE_ENABLED, ::isForceCache)
+    val hideCompletedFlow = asFlow(KEY_HIDE_COMPLETED, ::getHideCompleted)
+
+    private fun saveActiveLibraryId(host: String) = sharedPreferences.edit { putString(KEY_PREFERRED_LIBRARY_ID, host) }
+
+    private fun getPreferredLibraryId(): String? = sharedPreferences.getString(KEY_PREFERRED_LIBRARY_ID, null)
+
+    private fun saveActiveLibraryName(host: String) = sharedPreferences.edit { putString(KEY_PREFERRED_LIBRARY_NAME, host) }
+
+    private fun getPreferredLibraryType(): LibraryType =
+      sharedPreferences
+        .getString(KEY_PREFERRED_LIBRARY_TYPE, null)
+        ?.let { LibraryType.valueOf(it) }
+        ?: LibraryType.LIBRARY
+
+    private fun saveActiveLibraryType(type: LibraryType) =
+      sharedPreferences.edit {
+        putString(KEY_PREFERRED_LIBRARY_TYPE, type.name)
+      }
+
+    private fun getPreferredLibraryName(): String? = sharedPreferences.getString(KEY_PREFERRED_LIBRARY_NAME, null)
+
+    fun enableForceCache() = sharedPreferences.edit { putBoolean(CACHE_FORCE_ENABLED, true) }
+
+    fun disableForceCache() = sharedPreferences.edit { putBoolean(CACHE_FORCE_ENABLED, false) }
+
+    fun isForceCache(): Boolean = sharedPreferences.getBoolean(CACHE_FORCE_ENABLED, false)
+
+    fun saveUsername(username: String) = sharedPreferences.edit { putString(KEY_USERNAME, username) }
+
+    fun getUsername(): String? = sharedPreferences.getString(KEY_USERNAME, null)
+
+    fun saveServerVersion(version: String) = sharedPreferences.edit { putString(KEY_SERVER_VERSION, version) }
+
+    fun getServerVersion(): String? = sharedPreferences.getString(KEY_SERVER_VERSION, null)
+
+    fun savePassword(password: String) {
+      val encrypted = encrypt(password)
+      sharedPreferences.edit { putString(KEY_PASSWORD, encrypted) }
+    }
+
+    fun getPassword(): String? {
+      val encrypted = sharedPreferences.getString(KEY_PASSWORD, null) ?: return null
+      return decrypt(encrypted)
+    }
+
+    fun savePlayingItem(item: DetailedItem) {
+      savePlayingItemInternal(
+        libraryId = item.libraryId ?: return,
+        item = item,
+      )
+    }
+
+    fun clearPlayingItem() {
+      val libraryId = getPreferredLibraryId() ?: return
+
+      savePlayingItemInternal(
+        libraryId = libraryId,
+        item = null,
+      )
+    }
+
+    private fun savePlayingItemInternal(
+      libraryId: String,
+      item: DetailedItem?,
+    ) {
+      val adapter = moshi.adapter<Map<String, DetailedItem>>(playingItemsType)
+
+      val current =
+        try {
+          sharedPreferences
+            .getString(KEY_PLAYING_ITEM, null)
+            ?.let { adapter.fromJson(it) }
+            ?.toMutableMap()
+            ?: mutableMapOf()
+        } catch (t: Throwable) {
+          mutableMapOf()
+        }
+
+      if (item == null) {
+        current.remove(libraryId)
+      } else {
+        current[libraryId] = item
+      }
+
+      try {
+        sharedPreferences.edit(commit = true) { putString(KEY_PLAYING_ITEM, adapter.toJson(current)) }
+      } catch (_: Throwable) {
+      }
+    }
+
+    fun getPlayingItem(): DetailedItem? {
+      val libraryId = getPreferredLibraryId() ?: return null
+
+      val adapter = moshi.adapter<Map<String, DetailedItem>>(playingItemsType)
+
+      val items =
+        try {
+          sharedPreferences
+            .getString(KEY_PLAYING_ITEM, null)
+            ?.let { adapter.fromJson(it) }
+            ?: emptyMap()
+        } catch (t: Throwable) {
+          emptyMap()
+        }
+
+      return items[libraryId]
+    }
+
+    fun saveRecentBooks(recentBooks: List<RecentBook>) {
+      val type = Types.newParameterizedType(List::class.java, RecentBook::class.java)
+      val adapter = moshi.adapter<List<RecentBook>>(type)
+
+      sharedPreferences.edit {
+        putString(KEY_RECENT_BOOKS, adapter.toJson(recentBooks))
+      }
+    }
+
+    fun getRecentBooks(): List<RecentBook> {
+      val json = sharedPreferences.getString(KEY_RECENT_BOOKS, null) ?: return emptyList()
+      val type = Types.newParameterizedType(List::class.java, RecentBook::class.java)
+      val adapter = moshi.adapter<List<RecentBook>>(type)
+
+      return adapter.fromJson(json) ?: emptyList()
+    }
+
+    fun savePlaybackSnapshot(snapshot: PlaybackSnapshotRecord) {
+      val adapter = moshi.adapter<Map<String, PlaybackSnapshotRecord>>(playbackSnapshotType)
+
+      val current =
+        try {
+          sharedPreferences
+            .getString(KEY_PLAYBACK_SNAPSHOTS, null)
+            ?.let { adapter.fromJson(it) }
+            ?.toMutableMap()
+            ?: mutableMapOf()
+        } catch (_: Throwable) {
+          mutableMapOf()
+        }
+
+      current[snapshot.bookId] = snapshot
+
+      sharedPreferences.edit(commit = true) {
+        putString(KEY_PLAYBACK_SNAPSHOTS, adapter.toJson(current))
+      }
+    }
+
+    fun getPlaybackSnapshot(bookId: String): PlaybackSnapshotRecord? {
+      val adapter = moshi.adapter<Map<String, PlaybackSnapshotRecord>>(playbackSnapshotType)
+
+      val snapshots =
+        try {
+          sharedPreferences
+            .getString(KEY_PLAYBACK_SNAPSHOTS, null)
+            ?.let { adapter.fromJson(it) }
+            ?: emptyMap()
+        } catch (_: Throwable) {
+          emptyMap()
+        }
+
+      return snapshots[bookId]
+    }
+
+    fun saveSeekTime(seekTime: SeekTime) {
+      val adapter = moshi.adapter(SeekTime::class.java)
+      val json = adapter.toJson(seekTime)
+
+      sharedPreferences.edit(commit = true) { putString(KEY_PREFERRED_SEEK_TIME, json) }
+    }
+
+    fun getSeekTime(): SeekTime {
+      val json = sharedPreferences.getString(KEY_PREFERRED_SEEK_TIME, null)
+      return when (json) {
+        null -> {
+          SeekTime.Default
+        }
+
+        else -> {
+          val adapter = moshi.adapter(SeekTime::class.java)
+          adapter.fromJson(json) ?: SeekTime.Default
+        }
+      }
+    }
+
+    fun getSoftwareCodecsEnabled(): Boolean = sharedPreferences.getBoolean(KEY_SOFTWARE_CODECS, false)
+
+    fun saveSoftwareCodecsEnabled(value: Boolean) =
+      sharedPreferences.edit {
+        putBoolean(KEY_SOFTWARE_CODECS, value)
+      }
+
+    fun getMediaCodecQueueingMode(): MediaCodecQueueingMode =
+      sharedPreferences
+        .getString(KEY_MEDIA_CODEC_QUEUEING_MODE, MediaCodecQueueingMode.AUTOMATIC.name)
+        ?.let { value -> runCatching { MediaCodecQueueingMode.valueOf(value) }.getOrNull() }
+        ?: MediaCodecQueueingMode.AUTOMATIC
+
+    fun saveMediaCodecQueueingMode(value: MediaCodecQueueingMode) =
+      sharedPreferences.edit {
+        putString(KEY_MEDIA_CODEC_QUEUEING_MODE, value.name)
+      }
+
+    fun getHideCompleted(): Boolean = sharedPreferences.getBoolean(KEY_HIDE_COMPLETED, false)
+
+    fun saveHideCompleted(value: Boolean) =
+      sharedPreferences.edit {
+        putBoolean(KEY_HIDE_COMPLETED, value)
+      }
+
+    companion object {
+      private const val KEY_ALIAS = "secure_key_alias"
+      private const val KEY_HOST = "host"
+      private const val KEY_USERNAME = "username"
+      private const val KEY_PASSWORD = "password"
+      private const val KEY_WEBDAV_ROOT = "webdav_root"
+      private const val CACHE_FORCE_ENABLED = "cache_force_enabled"
+
+      private const val KEY_SERVER_VERSION = "server_version"
+
+      private const val KEY_DEVICE_ID = "device_id"
+
+      private const val KEY_PREFERRED_LIBRARY_ID = "preferred_library_id"
+      private const val KEY_PREFERRED_LIBRARY_NAME = "preferred_library_name"
+      private const val KEY_PREFERRED_LIBRARY_TYPE = "preferred_library_type"
+
+      private const val KEY_PREFERRED_PLAYBACK_SPEED = "preferred_playback_speed"
+      private const val KEY_PREFERRED_SEEK_TIME = "preferred_seek_time"
+
+      private const val KEY_PREFERRED_COLOR_SCHEME = "preferred_color_scheme"
+      private const val KEY_MATERIAL_YOU_ENABLED = "material_you_enabled"
+      private const val KEY_PREFERRED_AUTO_DOWNLOAD = "preferred_auto_download"
+      private const val KEY_PREFERRED_AUTO_DOWNLOAD_NETWORK_TYPE = "preferred_auto_download_network_type"
+      private const val KEY_AUTO_DOWNLOAD_DELAYED = "auto_download_delayed"
+      private const val KEY_PREFERRED_LIBRARY_ORDERING = "preferred_library_ordering"
+      private const val KEY_SOFTWARE_CODECS = "software_codecs"
+      private const val KEY_MEDIA_CODEC_QUEUEING_MODE = "media_codec_queueing_mode"
+      private const val KEY_HIDE_COMPLETED = "hide_completed"
+      private const val KEY_PREFERRED_SLEEP_TIMER_STOP_MODE = "preferred_sleep_timer_stop_mode"
+
+      private const val KEY_PLAYING_ITEM = "playing_item"
+      private const val KEY_RECENT_BOOKS = "recent_books"
+      private const val KEY_PLAYBACK_SNAPSHOTS = "playback_snapshots"
+      private const val KEY_VOLUME_BOOST = "volume_boost"
+
+      private const val ANDROID_KEYSTORE = "AndroidKeyStore"
+      private const val TRANSFORMATION = "AES/GCM/NoPadding"
+
+      private fun getSecretKey(): SecretKey {
+        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
+        keyStore.load(null)
+
+        keyStore.getKey(KEY_ALIAS, null)?.let {
+          return it as SecretKey
+        }
+
+        val keyGenerator =
+          KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+        val keyGenParameterSpec =
+          KeyGenParameterSpec
+            .Builder(
+              KEY_ALIAS,
+              KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+            ).setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .build()
+        keyGenerator.init(keyGenParameterSpec)
+        return keyGenerator.generateKey()
+      }
+
+      private fun encrypt(data: String): String {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, getSecretKey())
+
+        val cipherText = cipher.doFinal(data.toByteArray())
+        val ivAndCipherText = cipher.iv + cipherText
+
+        return Base64.encodeToString(ivAndCipherText, Base64.DEFAULT)
+      }
+
+      private fun decrypt(data: String): String? {
+        val decodedData = Base64.decode(data, Base64.DEFAULT)
+        val iv = decodedData.sliceArray(0 until 12)
+        val cipherText = decodedData.sliceArray(12 until decodedData.size)
+
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        val spec = GCMParameterSpec(128, iv)
+        cipher.init(Cipher.DECRYPT_MODE, getSecretKey(), spec)
+
+        return try {
+          String(cipher.doFinal(cipherText))
+        } catch (ex: Exception) {
+          null
+        }
+      }
+
+      private val playingItemsType =
+        Types.newParameterizedType(
+          Map::class.java,
+          String::class.java,
+          DetailedItem::class.java,
+        )
+
+      private val playbackSnapshotType =
+        Types.newParameterizedType(
+          Map::class.java,
+          String::class.java,
+          PlaybackSnapshotRecord::class.java,
+        )
+    }
+  }

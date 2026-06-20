@@ -1,8 +1,8 @@
 import java.util.Properties
-import org.grakovne.lissen.buildlogic.missingRequiredProperties
-import org.grakovne.lissen.buildlogic.requiresReleaseSigning
-import org.grakovne.lissen.buildlogic.resolveGitHash
-import org.grakovne.lissen.buildlogic.runGitShortHead
+import io.github.hobin66.webdavplayer.buildlogic.missingRequiredProperties
+import io.github.hobin66.webdavplayer.buildlogic.requiresReleaseSigning
+import io.github.hobin66.webdavplayer.buildlogic.resolveGitHash
+import io.github.hobin66.webdavplayer.buildlogic.runGitShortHead
 
 plugins {
   alias(libs.plugins.android.application)
@@ -98,7 +98,7 @@ gradle.taskGraph.whenReady {
 }
 
 android {
-  namespace = "org.grakovne.lissen"
+  namespace = "io.github.hobin66.webdavplayer"
   compileSdk = 36
 
   signingConfigs {
@@ -115,13 +115,13 @@ android {
   }
   
   lint {
-    disable.add("MissingTranslation")
+    disable.add("TypographyQuotes")
   }
   
   defaultConfig {
     val commitHash = gitCommitHash()
     
-    applicationId = "org.grakovne.lissen"
+    applicationId = "io.github.hobin66.webdavplayer.app"
     minSdk = 28
     targetSdk = 36
     versionCode = buildNumber
@@ -146,7 +146,7 @@ android {
       )
     }
     debug {
-      applicationIdSuffix = ".debug"
+      applicationIdSuffix = ".dev"
       versionNameSuffix = " (DEBUG)"
       matchingFallbacks.add("release")
       isDebuggable = true
@@ -175,6 +175,12 @@ android {
       // WSA and some sideload installers are more reliable when native libraries
       // are stored with legacy packaging and extracted during install.
       useLegacyPackaging = true
+      keepDebugSymbols +=
+        setOf(
+          "**/libandroidx.graphics.path.so",
+          "**/libffmpegJNI.so",
+          "**/libhoko_blur.so",
+        )
     }
     resources {
       excludes += "/META-INF/{AL2.0,LGPL2.1,MIT}"
@@ -209,10 +215,8 @@ dependencies {
   implementation(libs.androidx.material)
   implementation(libs.compose.shimmer.android)
   
-  implementation(libs.retrofit)
   implementation(libs.logging.interceptor)
   implementation(libs.okhttp)
-  implementation(libs.androidx.browser)
   
   implementation(libs.coil.compose)
   implementation(libs.coil.svg)
@@ -256,7 +260,6 @@ dependencies {
   implementation(libs.androidx.room.runtime)
   implementation(libs.androidx.room.ktx)
   
-  implementation(libs.converter.moshi)
   implementation(libs.moshi)
   
   debugImplementation(libs.androidx.ui.tooling)

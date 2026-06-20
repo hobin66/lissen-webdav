@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Lissen" parent="Theme.Material3.DayNight.NoActionBar" />
+    <style name="Theme.WebdavPlayer" parent="Theme.Material3.DayNight.NoActionBar" />
 
     <style name="Theme.Transparent" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="android:windowIsTranslucent">true</item>
@@ -10,4 +10,3 @@
         <item name="android:colorBackgroundCacheHint">@null</item>
     </style>
 </resources>
-

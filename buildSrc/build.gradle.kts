@@ -1,5 +1,5 @@
 plugins {
-  `kotlin-dsl`
+  kotlin("jvm") version "2.3.20"
 }
 
 repositories {
@@ -7,6 +7,7 @@ repositories {
 }
 
 dependencies {
+  implementation(gradleApi())
   testImplementation(kotlin("test"))
 }
 

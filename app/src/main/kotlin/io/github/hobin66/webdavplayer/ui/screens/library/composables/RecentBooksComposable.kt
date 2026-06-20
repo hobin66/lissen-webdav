@@ -1,0 +1,125 @@
+package io.github.hobin66.webdavplayer.ui.screens.library.composables
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MaterialTheme.typography
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import coil3.ImageLoader
+import coil3.request.ImageRequest
+import coil3.request.crossfade
+import io.github.hobin66.webdavplayer.R
+import io.github.hobin66.webdavplayer.lib.domain.RecentBook
+import io.github.hobin66.webdavplayer.ui.components.AsyncShimmeringImage
+import io.github.hobin66.webdavplayer.ui.navigation.AppNavigationService
+
+@Composable
+fun RecentBooksComposable(
+  navController: AppNavigationService,
+  recentBooks: List<RecentBook>,
+  imageLoader: ImageLoader,
+  modifier: Modifier = Modifier,
+) {
+  val configuration = LocalConfiguration.current
+  val screenWidth = remember { configuration.screenWidthDp.dp }
+
+  val itemsVisible = 2.3f
+  val spacing = 16.dp
+  val totalSpacing = spacing * (itemsVisible + 1)
+  val itemWidth = (screenWidth - totalSpacing) / itemsVisible
+
+  Row(
+    modifier =
+      modifier
+        .fillMaxWidth()
+        .horizontalScroll(rememberScrollState())
+        .padding(horizontal = 4.dp),
+    horizontalArrangement = Arrangement.spacedBy(16.dp),
+  ) {
+    recentBooks
+      .forEach { book ->
+        RecentBookItemComposable(
+          book = book,
+          width = itemWidth,
+          imageLoader = imageLoader,
+          navController = navController,
+        )
+      }
+  }
+}
+
+@Composable
+fun RecentBookItemComposable(
+  navController: AppNavigationService,
+  book: RecentBook,
+  width: Dp,
+  imageLoader: ImageLoader,
+) {
+  Column(
+    modifier =
+      Modifier
+        .width(width)
+        .clickable { navController.showPlayer(book.id, book.title, book.subtitle) },
+  ) {
+    val context = LocalContext.current
+
+    val imageRequest =
+      remember(book.id) {
+        ImageRequest
+          .Builder(context)
+          .data(book.id)
+          .crossfade(300)
+          .build()
+      }
+
+    AsyncShimmeringImage(
+      imageRequest = imageRequest,
+      imageLoader = imageLoader,
+      contentDescription = stringResource(R.string.cover_content_description, book.title),
+      contentScale = ContentScale.FillBounds,
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .clip(RoundedCornerShape(8.dp))
+          .aspectRatio(1f),
+      error = painterResource(R.drawable.cover_fallback),
+    )
+
+    Spacer(modifier = Modifier.height(10.dp))
+
+    Column(modifier = Modifier.padding(horizontal = 4.dp)) {
+      Text(
+        text = book.title,
+        style = typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        color = MaterialTheme.colorScheme.onBackground,
+      )
+    }
+  }
+}

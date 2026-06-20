@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-	namespace = "org.grakovne.lissen.lib"
+	namespace = "io.github.hobin66.webdavplayer.lib"
 	compileSdk = 36
 	
 	defaultConfig {
@@ -34,7 +34,6 @@ dependencies {
 	implementation(libs.androidx.core.ktx)
 	implementation(libs.material)
 	
-	implementation(libs.converter.moshi)
 	implementation(libs.moshi)
 	
 	ksp(libs.moshi.kotlin.codegen)

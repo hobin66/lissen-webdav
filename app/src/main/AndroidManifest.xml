@@ -15,7 +15,7 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
     <application
-        android:name=".LissenApplication"
+        android:name=".WebdavPlayerApplication"
         android:allowBackup="true"
         android:hasFragileUserData="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -27,9 +27,9 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:largeHeap="true"
-        android:theme="@style/Theme.Lissen"
+        android:theme="@style/Theme.WebdavPlayer"
         tools:ignore="DiscouragedApi,UnusedAttribute"
-        android:manageSpaceActivity="org.grakovne.lissen.content.LissenDataManagementActivity"
+        android:manageSpaceActivity="io.github.hobin66.webdavplayer.content.WebdavPlayerDataManagementActivity"
         tools:targetApi="36">
 
         <!-- Add Android Auto support -->
@@ -42,7 +42,7 @@
             android:name=".ui.activity.AppActivity"
             android:exported="true"
             android:launchMode="singleTop"
-            android:theme="@style/Theme.Lissen"
+            android:theme="@style/Theme.WebdavPlayer"
             tools:ignore="LockedOrientationActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -51,7 +51,7 @@
         </activity>
 
         <activity
-            android:name="org.grakovne.lissen.content.LissenDataManagementActivity"
+            android:name="io.github.hobin66.webdavplayer.content.WebdavPlayerDataManagementActivity"
             android:exported="true"
             android:theme="@style/Theme.Transparent"
             tools:ignore="LockedOrientationActivity" />
@@ -79,7 +79,7 @@
             android:name=".playback.service.SleepTimerAlarmReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="org.grakovne.lissen.player.SLEEP_TIMER_ALARM" />
+                <action android:name="io.github.hobin66.webdavplayer.player.SLEEP_TIMER_ALARM" />
             </intent-filter>
         </receiver>
 

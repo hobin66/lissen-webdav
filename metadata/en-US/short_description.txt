@@ -1,1 +1,1 @@
-Clean Audiobookshelf Player
+独立的 WebDAV 有声书播放器
