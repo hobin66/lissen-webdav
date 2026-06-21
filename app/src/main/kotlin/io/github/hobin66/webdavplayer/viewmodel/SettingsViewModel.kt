@@ -41,6 +41,12 @@ class SettingsViewModel
     private val _username = MutableLiveData(preferences.getUsername())
     val username = _username
 
+    private val _rootPath = MutableLiveData(preferences.getWebdavRoot())
+    val rootPath = _rootPath
+
+    private val _password = MutableLiveData(preferences.getPassword())
+    val password = _password
+
     private val _preferredLibrary = MutableLiveData<Library?>(preferences.getPreferredLibrary())
     val preferredLibrary: LiveData<Library?> = _preferredLibrary
 
@@ -151,6 +157,10 @@ class SettingsViewModel
 
     fun refreshConnectionInfo() {
       fetchConnectionHost()
+      _username.postValue(preferences.getUsername())
+      _password.postValue(preferences.getPassword())
+      _rootPath.postValue(preferences.getWebdavRoot())
+      _serverVersion.postValue(preferences.getServerVersion())
 
       viewModelScope.launch {
         when (val response = mediaChannel.fetchConnectionInfo()) {

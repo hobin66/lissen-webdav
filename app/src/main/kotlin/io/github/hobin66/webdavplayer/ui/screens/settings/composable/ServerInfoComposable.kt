@@ -1,12 +1,12 @@
 package io.github.hobin66.webdavplayer.ui.screens.settings.composable
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -37,14 +37,25 @@ import io.github.hobin66.webdavplayer.viewmodel.SettingsViewModel
 @Composable
 fun ServerInfoComposable(viewModel: SettingsViewModel) {
   var connectionInfoExpanded by remember { mutableStateOf(false) }
+  var showPassword by remember { mutableStateOf(false) }
 
   val host by viewModel.host.observeAsState()
+  val username by viewModel.username.observeAsState()
+  val rootPath by viewModel.rootPath.observeAsState()
+  val password by viewModel.password.observeAsState()
+  val serverVersion by viewModel.serverVersion.observeAsState()
 
   LaunchedEffect(Unit) {
     viewModel.refreshConnectionInfo()
   }
 
-  Row(
+  LaunchedEffect(connectionInfoExpanded) {
+    if (!connectionInfoExpanded) {
+      showPassword = false
+    }
+  }
+
+  androidx.compose.foundation.layout.Row(
     modifier =
       Modifier
         .fillMaxWidth()
@@ -94,7 +105,24 @@ fun ServerInfoComposable(viewModel: SettingsViewModel) {
               .padding(bottom = 16.dp)
               .padding(horizontal = 16.dp),
         ) {
-          viewModel.username.value?.let {
+          host?.url?.takeIf { it.isNotBlank() }?.let {
+            InfoRow(
+              label = stringResource(R.string.hint_server_url_input),
+              value = it,
+            )
+            HorizontalDivider()
+          }
+
+          rootPath?.takeIf { it.isNotBlank() }?.let {
+            InfoRow(
+              label = stringResource(R.string.login_screen_root_path_input),
+              value = it,
+            )
+
+            HorizontalDivider()
+          }
+
+          username?.takeIf { it.isNotBlank() }?.let {
             InfoRow(
               label = stringResource(R.string.settings_screen_connected_as_title),
               value = it,
@@ -103,7 +131,31 @@ fun ServerInfoComposable(viewModel: SettingsViewModel) {
             HorizontalDivider()
           }
 
-          viewModel.serverVersion.value?.let {
+          password?.takeIf { it.isNotEmpty() }?.let {
+            InfoRow(
+              label = stringResource(R.string.login_screen_password_input),
+              value = if (showPassword) it else maskPassword(it),
+              action = {
+                IconButton(onClick = { showPassword = !showPassword }) {
+                  Icon(
+                    imageVector = if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                    contentDescription =
+                      stringResource(
+                        if (showPassword) {
+                          R.string.settings_screen_hide_password_hint
+                        } else {
+                          R.string.login_screen_show_password_hint
+                        },
+                      ),
+                  )
+                }
+              },
+            )
+
+            HorizontalDivider()
+          }
+
+          serverVersion?.takeIf { it.isNotBlank() }?.let {
             InfoRow(
               label = stringResource(R.string.settings_screen_server_version),
               value = it,
@@ -119,16 +171,27 @@ fun ServerInfoComposable(viewModel: SettingsViewModel) {
 fun InfoRow(
   label: String,
   value: String,
+  action: (@Composable () -> Unit)? = null,
 ) {
   ListItem(
     headlineContent = {
-      Row(
+      Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
       ) {
-        Text(text = label)
-        Text(text = value)
+        Text(
+          text = label,
+          style = typography.labelLarge,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+          text = value,
+          style = typography.bodyLarge,
+          modifier = Modifier.padding(top = 4.dp),
+        )
       }
     },
+    trailingContent = action,
   )
 }
+
+private fun maskPassword(password: String): String = "\u2022".repeat(password.length.coerceAtLeast(8))

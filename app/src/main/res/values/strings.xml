@@ -9,6 +9,7 @@
     <string name="login_screen_password_input">密码</string>
     <string name="login_screen_root_path_input">根目录</string>
     <string name="login_screen_show_password_hint">显示密码</string>
+    <string name="settings_screen_hide_password_hint">隐藏密码</string>
     <string name="common_back">返回</string>
     <string name="common_clear">清除</string>
     <string name="common_settings">设置</string>
