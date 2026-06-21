@@ -9,6 +9,7 @@ const {
   beginPublishState,
   clearPublishState,
   collectAbiApkPaths,
+  collectUniversalApkPath,
   readProperties,
   reconcilePublishState,
   serializeProperties,
@@ -81,6 +82,20 @@ test("collectAbiApkPaths requires exactly one release apk per ABI", () => {
 
     assert.equal(result.get("arm64-v8a"), path.join(outputRoot, "app-arm64-v8a-release.apk"));
     assert.equal(result.get("x86_64"), path.join(outputRoot, "app-x86_64-release.apk"));
+  });
+});
+
+test("collectUniversalApkPath requires a universal release apk", () => {
+  withTempDir((tempDir) => {
+    const outputRoot = path.join(tempDir, "app", "build", "outputs", "apk", "release");
+    fs.mkdirSync(outputRoot, { recursive: true });
+    const universalPath = path.join(outputRoot, "app-universal-release.apk");
+    fs.writeFileSync(universalPath, "");
+
+    assert.equal(
+      collectUniversalApkPath(path.join(tempDir, "app", "build", "outputs", "apk")),
+      universalPath,
+    );
   });
 });
 

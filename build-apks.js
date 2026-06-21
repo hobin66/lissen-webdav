@@ -8,6 +8,7 @@ const {
   beginPublishState,
   clearPublishState,
   collectAbiApkPaths,
+  collectUniversalApkPath,
   copyFile,
   readProperties,
   reconcilePublishState,
@@ -23,6 +24,7 @@ const buildLockPath = path.join(outputRoot, ".build-apks.lock");
 const publishStateFile = path.join(outputRoot, ".build-apks-state.json");
 const allowedAbis = ["arm64-v8a", "x86_64"];
 const appLabel = "lissen";
+const wsaArtifact = "universal";
 
 function runGradle(taskName, extraEnv = {}) {
   const gradleExecutable = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
@@ -116,6 +118,7 @@ function main() {
     });
 
     const builtApks = collectAbiApkPaths(apkOutputRoot, allowedAbis);
+    const universalApkPath = collectUniversalApkPath(apkOutputRoot);
 
     versionOutputDir = path.join(outputRoot, resolvedVersionName);
     versionStagingDir = path.join(outputRoot, `.tmp-${resolvedVersionName}-${process.pid}`);
@@ -140,11 +143,23 @@ function main() {
       });
     }
 
+    const universalTargetName = `${appLabel}-${resolvedVersionName}-${wsaArtifact}-release.apk`;
+    copyFile(universalApkPath, path.join(versionStagingDir, universalTargetName));
+    copiedArtifacts.push({
+      abi: wsaArtifact,
+      file: universalTargetName,
+      source: path.relative(rootDir, universalApkPath),
+    });
+
     const metadata = {
       versionName: resolvedVersionName,
       versionCode: nextBuildNumber,
       buildType: "release",
       generatedAt: new Date().toISOString(),
+      recommendedArtifacts: {
+        default: universalTargetName,
+        wsa: universalTargetName,
+      },
       artifacts: copiedArtifacts,
     };
     fs.writeFileSync(

@@ -27,7 +27,7 @@ class PlaybackEnhancerService
     private val player: ExoPlayer,
     private val sharedPreferences: WebdavPlayerPreferences,
   ) : RunningComponent {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private var enhancer: LoudnessEnhancer? = null
 

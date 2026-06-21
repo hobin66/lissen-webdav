@@ -18,6 +18,7 @@ import io.github.hobin66.webdavplayer.channel.webdav.cache.WebdavBookDetailCache
 import io.github.hobin66.webdavplayer.channel.webdav.cache.WebdavBookIndexEntry
 import io.github.hobin66.webdavplayer.channel.webdav.cache.WebdavPersistentCache
 import io.github.hobin66.webdavplayer.channel.webdav.client.ConditionalFetchStatus
+import io.github.hobin66.webdavplayer.channel.webdav.client.ConditionalTextResponse
 import io.github.hobin66.webdavplayer.channel.webdav.client.WebdavClient
 import io.github.hobin66.webdavplayer.channel.webdav.model.WebdavBookMetadata
 import io.github.hobin66.webdavplayer.channel.webdav.model.WebdavResource
@@ -657,16 +658,57 @@ class WebdavMediaChannel
     private suspend fun ensureBookMetadata(
       directory: WebdavResource,
       previous: WebdavBookIndexEntry?,
-    ): MetadataResolution? {
-      val metadataPath = "${directory.relativePath}/.webdav-player-book.json"
-      val conditionalResult =
-        webdavClient.readTextConditionally(
-          relativePath = metadataPath,
-          knownEtag = previous?.metadataEtag,
-          knownLastModified = previous?.metadataLastModified,
-        )
+    ): MetadataResolution? =
+      ensureBookMetadataFromCandidates(
+        directory = directory,
+        previous = previous,
+        candidatePaths = metadataFilePathCandidates(directory.relativePath),
+      )
 
-      return conditionalResult.foldAsync(
+    private suspend fun ensureBookMetadataFromCandidates(
+      directory: WebdavResource,
+      previous: WebdavBookIndexEntry?,
+      candidatePaths: List<String>,
+    ): MetadataResolution? {
+      val metadataPath = candidatePaths.firstOrNull()
+      if (metadataPath == null) {
+        val created = createDefaultMetadata(directory)
+        return MetadataResolution(
+          metadata = created,
+          eTag = null,
+          lastModified = null,
+        )
+      }
+
+      return resolveMetadataConditionally(
+        conditionalResult = readMetadataConditionally(metadataPath, previous),
+        previous = previous,
+        onMissing = {
+          ensureBookMetadataFromCandidates(
+            directory = directory,
+            previous = previous,
+            candidatePaths = candidatePaths.drop(1),
+          )
+        },
+      )
+    }
+
+    private suspend fun readMetadataConditionally(
+      relativePath: String,
+      previous: WebdavBookIndexEntry?,
+    ): OperationResult<ConditionalTextResponse> =
+      webdavClient.readTextConditionally(
+        relativePath = relativePath,
+        knownEtag = previous?.metadataEtag,
+        knownLastModified = previous?.metadataLastModified,
+      )
+
+    private suspend fun resolveMetadataConditionally(
+      conditionalResult: OperationResult<ConditionalTextResponse>,
+      previous: WebdavBookIndexEntry?,
+      onMissing: suspend () -> MetadataResolution?,
+    ): MetadataResolution? =
+      conditionalResult.foldAsync(
         onSuccess = { conditional ->
           when (conditional.status) {
             ConditionalFetchStatus.NOT_MODIFIED -> {
@@ -693,12 +735,7 @@ class WebdavMediaChannel
             }
 
             ConditionalFetchStatus.NOT_FOUND -> {
-              val created = createDefaultMetadata(directory)
-              MetadataResolution(
-                metadata = created,
-                eTag = null,
-                lastModified = null,
-              )
+              onMissing()
             }
           }
         },
@@ -714,7 +751,6 @@ class WebdavMediaChannel
             }
         },
       )
-    }
 
     private suspend fun resolveCoverValidation(
       directory: WebdavResource,
@@ -844,7 +880,7 @@ class WebdavMediaChannel
           cover = "cover.jpg",
         )
 
-      val metadataPath = "${directory.relativePath}/.webdav-player-book.json"
+      val metadataPath = "${directory.relativePath}/$BOOK_METADATA_FILE_NAME"
       when (val result = webdavClient.putTextIfAbsent(metadataPath, metadataAdapter.toJson(defaultMetadata))) {
         is OperationResult.Error -> {
           Timber.w("Unable to persist default WebDAV metadata for %s: %s", directory.relativePath, result.code)
@@ -1109,12 +1145,18 @@ class WebdavMediaChannel
     companion object {
       const val WEBDAV_LIBRARY_ID = "webdav_library"
       const val WEBDAV_LIBRARY_TITLE = "媒体库"
+      internal const val BOOK_METADATA_FILE_NAME = ".lissen-book.json"
+      internal const val LEGACY_BOOK_METADATA_FILE_NAME = ".webdav-player-book.json"
 
       private const val REFRESH_PARALLELISM = 6
 
       private val chunkRegex = Regex("""\d+|\D+""")
       private const val unresolvedDisplayDurationSeconds = 0.0
       private const val unresolvedTimelineDurationSeconds = 1.0
+
+      internal fun metadataFilePathCandidates(directoryRelativePath: String): List<String> =
+        listOf(BOOK_METADATA_FILE_NAME, LEGACY_BOOK_METADATA_FILE_NAME)
+          .map { "$directoryRelativePath/$it" }
 
       internal fun defaultWebdavMetadataId(directoryRelativePath: String): String =
         UUID.nameUUIDFromBytes(directoryRelativePath.toByteArray(StandardCharsets.UTF_8)).toString()

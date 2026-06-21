@@ -121,7 +121,9 @@ android {
   defaultConfig {
     val commitHash = gitCommitHash()
     
-    applicationId = "io.github.hobin66.webdavplayer.app"
+    // Keep the historic package name stable so Android/WSA can upgrade
+    // existing Lissen installs instead of treating this build as incompatible.
+    applicationId = "org.grakovne.lissen"
     minSdk = 28
     targetSdk = 36
     versionCode = buildNumber
@@ -167,7 +169,9 @@ android {
       isEnable = true
       reset()
       include("arm64-v8a", "x86_64")
-      isUniversalApk = false
+      // Keep per-ABI APKs for smaller device-specific installs, and also emit
+      // a universal APK so WSA and other sideload flows can install one file reliably.
+      isUniversalApk = true
     }
   }
   packaging {

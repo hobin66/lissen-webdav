@@ -123,6 +123,37 @@ function collectAbiApkPaths(apkOutputRoot, allowedAbis) {
   return collected;
 }
 
+function collectUniversalApkPath(apkOutputRoot) {
+  let universalApkPath = null;
+
+  for (const filePath of walkFiles(apkOutputRoot)) {
+    if (!filePath.endsWith(".apk")) {
+      continue;
+    }
+
+    const normalizedPath = filePath.replace(/\\/g, "/");
+    if (!normalizedPath.includes("/release/")) {
+      continue;
+    }
+
+    if (!normalizedPath.endsWith("/app-universal-release.apk")) {
+      continue;
+    }
+
+    if (universalApkPath) {
+      throw new Error("Found multiple universal release APKs.");
+    }
+
+    universalApkPath = filePath;
+  }
+
+  if (!universalApkPath) {
+    throw new Error("Missing universal release APK.");
+  }
+
+  return universalApkPath;
+}
+
 function readPublishState(stateFilePath) {
   if (!fs.existsSync(stateFilePath)) {
     return null;
@@ -175,6 +206,7 @@ module.exports = {
   beginPublishState,
   clearPublishState,
   collectAbiApkPaths,
+  collectUniversalApkPath,
   copyFile,
   readProperties,
   readPublishState,

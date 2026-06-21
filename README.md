@@ -32,14 +32,15 @@ nano local.properties
 
 ### ABI Packaging
 
-This repository now ships split APKs for `arm64-v8a` and `x86_64` only.
+This repository now ships release APKs for `arm64-v8a`, `x86_64`, and a universal sideload build.
 
 Run the Node packaging script to bump the build number, build release APKs, and archive them:
 ```
 node build-apks.js
 ```
 
-Artifacts are copied into `packages/<version>/` with one APK per ABI.
+Artifacts are copied into `packages/<version>/`.
+For WSA and other sideload flows, install the `*-universal-release.apk` artifact first.
 
 ### AI-Assisted Contributions
 
