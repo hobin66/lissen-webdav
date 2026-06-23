@@ -306,6 +306,7 @@ fun LibraryScreen(
               false -> {
                 DefaultActionComposable(
                   onSearchRequested = { libraryViewModel.requestSearch() },
+                  onManageBooksRequested = { navController.showLibraryManageSettings() },
                   onPreferencesRequested = { preferencesExpanded = true },
                 )
               }

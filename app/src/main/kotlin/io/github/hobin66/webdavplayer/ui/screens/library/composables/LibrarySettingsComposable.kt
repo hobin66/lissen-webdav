@@ -72,13 +72,6 @@ fun LibrarySettingsComposable(
 
             HorizontalDivider()
 
-            ManageLibraryBooksItemComposable(
-              onClicked = {
-                onDismissRequest()
-                navController.showLibraryManageSettings()
-              },
-            )
-
             ApplicationSettingsItemComposable(
               onClicked = {
                 onDismissRequest()
@@ -113,28 +106,6 @@ fun LibrarySettingsComposableItem(
             checkedThumbColor = colorScheme.onSurface,
             checkedTrackColor = colorScheme.background,
           ),
-      )
-    },
-  )
-}
-
-@Composable
-fun ManageLibraryBooksItemComposable(onClicked: () -> Unit) {
-  ListItem(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .clickable { onClicked() },
-    headlineContent = {
-      Text(
-        text = stringResource(R.string.library_manage_books_quick_entry_title),
-        style = typography.bodyLarge,
-      )
-    },
-    trailingContent = {
-      Icon(
-        imageVector = Icons.AutoMirrored.Outlined.ArrowForwardIos,
-        contentDescription = null,
       )
     },
   )
