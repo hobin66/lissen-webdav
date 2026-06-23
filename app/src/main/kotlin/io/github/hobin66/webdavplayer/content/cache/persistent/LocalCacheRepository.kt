@@ -147,6 +147,17 @@ class LocalCacheRepository
       cachedBookRepository
         .fetchMediaProgress(itemId)
 
+    suspend fun fetchAllMediaProgress(): Map<String, MediaProgress> =
+      cachedBookRepository
+        .fetchAllMediaProgress()
+
+    suspend fun updateMediaProgress(
+      bookId: String,
+      progress: MediaProgress?,
+    ) {
+      cachedBookRepository.updateMediaProgress(bookId, progress)
+    }
+
     suspend fun fetchRecentListenedBooks(libraryId: String): OperationResult<List<RecentBook>> =
       cachedBookRepository
         .fetchRecentBooks(libraryId)

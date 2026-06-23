@@ -11,7 +11,9 @@ import io.github.hobin66.webdavplayer.channel.common.OperationResult
 import io.github.hobin66.webdavplayer.channel.common.RefreshableChannel
 import io.github.hobin66.webdavplayer.channel.webdav.WebdavManageBookItem
 import io.github.hobin66.webdavplayer.channel.webdav.WebdavMediaChannel
+import io.github.hobin66.webdavplayer.channel.webdav.WebdavRemotePlaybackProgress
 import io.github.hobin66.webdavplayer.channel.webdav.WebdavRefreshProgress
+import io.github.hobin66.webdavplayer.channel.webdav.model.WebdavPlaybackProgress
 import io.github.hobin66.webdavplayer.content.cache.persistent.LocalCacheRepository
 import io.github.hobin66.webdavplayer.content.cache.temporary.CachedBookmarkProvider
 import io.github.hobin66.webdavplayer.content.cache.temporary.CachedCoverProvider
@@ -429,7 +431,7 @@ class WebdavMediaProvider
         mergeRecentPlayback(
           existing = preferences.getRecentBooks(),
           latest = recentItem,
-          limit = 20,
+          limit = RECENT_PLAYBACK_LIMIT,
         ),
       )
     }
@@ -446,6 +448,36 @@ class WebdavMediaProvider
           channel is RefreshableChannel -> channel.refreshRemoteCache()
           else -> OperationResult.Error(OperationError.UnsupportedError)
         }
+
+      if (result is OperationResult.Success) {
+        _remoteRefreshVersion.value = System.currentTimeMillis()
+      }
+
+      return result
+    }
+
+    suspend fun syncPlaybackProgress(
+      direction: PlaybackProgressSyncDirection,
+      onProgress: (WebdavRefreshProgress) -> Unit = {},
+    ): OperationResult<Unit> {
+      val channel = providePreferredChannel()
+      if (channel !is WebdavMediaChannel) {
+        return OperationResult.Error(OperationError.UnsupportedError)
+      }
+
+      val result =
+        runCatching {
+          when (direction) {
+            PlaybackProgressSyncDirection.LOCAL_TO_REMOTE -> syncLocalPlaybackProgressToRemote(channel, onProgress)
+            PlaybackProgressSyncDirection.REMOTE_TO_LOCAL -> syncRemotePlaybackProgressToLocal(channel, onProgress)
+          }
+        }.fold(
+          onSuccess = { it },
+          onFailure = {
+            Timber.e(it, "Unable to sync playback progress")
+            OperationResult.Error(OperationError.InternalError)
+          },
+        )
 
       if (result is OperationResult.Success) {
         _remoteRefreshVersion.value = System.currentTimeMillis()
@@ -521,9 +553,109 @@ class WebdavMediaProvider
 
     fun canRefreshRemoteCache(): Boolean = providePreferredChannel() is RefreshableChannel
 
+    fun canSyncPlaybackProgress(): Boolean = providePreferredChannel() is WebdavMediaChannel
+
     fun provideAuthService(): ChannelAuthService = channelProvider.provideChannelAuth()
 
     fun providePreferredChannel(): MediaChannel = channelProvider.provideMediaChannel()
+
+    private suspend fun syncLocalPlaybackProgressToRemote(
+      channel: WebdavMediaChannel,
+      onProgress: (WebdavRefreshProgress) -> Unit,
+    ): OperationResult<Unit> {
+      val localProgress = localCacheRepository.fetchAllMediaProgress()
+      val snapshots = preferences.getPlaybackSnapshots()
+      val remoteProgress =
+        (localProgress.keys + snapshots.keys)
+          .associateWith { bookId ->
+            WebdavPlaybackProgress.from(
+              mediaProgress = localProgress[bookId],
+              snapshot = snapshots[bookId],
+            )
+          }.filterValues { it != null }
+          .mapValues { (_, value) -> requireNotNull(value) }
+
+      return channel.uploadPlaybackProgress(
+        progressByBookId = remoteProgress,
+        onProgress = onProgress,
+      )
+    }
+
+    private suspend fun syncRemotePlaybackProgressToLocal(
+      channel: WebdavMediaChannel,
+      onProgress: (WebdavRefreshProgress) -> Unit,
+    ): OperationResult<Unit> =
+      channel.fetchRemotePlaybackProgress(onProgress).foldAsync(
+        onSuccess = { items ->
+          items.forEach { item ->
+            val progress = item.progress
+            localCacheRepository.updateMediaProgress(
+              bookId = item.bookId,
+              progress = progress?.toMediaProgress(),
+            )
+
+            val snapshot = progress?.toPlaybackSnapshot(item.bookId)
+            when (snapshot) {
+              null -> preferences.deletePlaybackSnapshot(item.bookId)
+              else -> preferences.savePlaybackSnapshot(snapshot)
+            }
+
+            updatePlayingItemProgress(
+              bookId = item.bookId,
+              progress = progress,
+            )
+          }
+
+          preferences.saveRecentBooks(
+            buildRemoteRecentPlayback(
+              existing = preferences.getRecentBooks(),
+              remoteItems = items,
+            ),
+          )
+          OperationResult.Success(Unit)
+        },
+        onFailure = { OperationResult.Error(it.code, it.message) },
+      )
+
+    private fun buildRemoteRecentPlayback(
+      existing: List<RecentBook>,
+      remoteItems: List<WebdavRemotePlaybackProgress>,
+    ): List<RecentBook> {
+      val remoteBookIds = remoteItems.map { it.bookId }.toSet()
+      val updated =
+        remoteItems.mapNotNull { item ->
+          val progress = item.progress ?: return@mapNotNull null
+          RecentBook(
+            id = item.bookId,
+            title = item.title,
+            subtitle = null,
+            author = item.author,
+            listenedPercentage = null,
+            listenedLastUpdate = progress.lastUpdate,
+          )
+        }
+
+      val merged =
+        updated +
+          existing.filterNot { it.id in remoteBookIds }
+
+      return merged
+        .distinctBy { it.id }
+        .sortedByDescending { it.listenedLastUpdate ?: 0L }
+        .take(RECENT_PLAYBACK_LIMIT)
+    }
+
+    private fun updatePlayingItemProgress(
+      bookId: String,
+      progress: WebdavPlaybackProgress?,
+    ) {
+      val playingItem = preferences.getPlayingItem()?.takeIf { it.id == bookId } ?: return
+      preferences.savePlayingItem(
+        playingItem.copy(
+          progress = progress?.toMediaProgress(),
+        ),
+      )
+    }
 
     private fun provideRemoteFileUri(
       libraryItemId: String,
@@ -565,5 +697,6 @@ class WebdavMediaProvider
 
     companion object {
       private const val FILE_URI_CACHE_SIZE = 256
+      private const val RECENT_PLAYBACK_LIMIT = 20
     }
   }

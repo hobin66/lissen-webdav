@@ -394,20 +394,44 @@ class WebdavPlayerPreferences
       }
     }
 
-    fun getPlaybackSnapshot(bookId: String): PlaybackSnapshotRecord? {
+    fun deletePlaybackSnapshot(bookId: String) {
+      updatePlaybackSnapshots { remove(bookId) }
+    }
+
+    fun getPlaybackSnapshot(bookId: String): PlaybackSnapshotRecord? = getPlaybackSnapshots()[bookId]
+
+    fun getPlaybackSnapshots(): Map<String, PlaybackSnapshotRecord> {
       val adapter = moshi.adapter<Map<String, PlaybackSnapshotRecord>>(playbackSnapshotType)
 
-      val snapshots =
+      return try {
+        sharedPreferences
+          .getString(KEY_PLAYBACK_SNAPSHOTS, null)
+          ?.let { adapter.fromJson(it) }
+          ?: emptyMap()
+      } catch (_: Throwable) {
+        emptyMap()
+      }
+    }
+
+    private fun updatePlaybackSnapshots(transform: MutableMap<String, PlaybackSnapshotRecord>.() -> Unit) {
+      val adapter = moshi.adapter<Map<String, PlaybackSnapshotRecord>>(playbackSnapshotType)
+
+      val current =
         try {
           sharedPreferences
             .getString(KEY_PLAYBACK_SNAPSHOTS, null)
             ?.let { adapter.fromJson(it) }
-            ?: emptyMap()
+            ?.toMutableMap()
+            ?: mutableMapOf()
         } catch (_: Throwable) {
-          emptyMap()
+          mutableMapOf()
         }
 
-      return snapshots[bookId]
+      current.transform()
+
+      sharedPreferences.edit(commit = true) {
+        putString(KEY_PLAYBACK_SNAPSHOTS, adapter.toJson(current))
+      }
     }
 
     fun saveSeekTime(seekTime: SeekTime) {

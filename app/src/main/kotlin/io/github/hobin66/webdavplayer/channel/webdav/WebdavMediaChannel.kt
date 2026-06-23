@@ -21,6 +21,7 @@ import io.github.hobin66.webdavplayer.channel.webdav.client.ConditionalFetchStat
 import io.github.hobin66.webdavplayer.channel.webdav.client.ConditionalTextResponse
 import io.github.hobin66.webdavplayer.channel.webdav.client.WebdavClient
 import io.github.hobin66.webdavplayer.channel.webdav.model.WebdavBookMetadata
+import io.github.hobin66.webdavplayer.channel.webdav.model.WebdavPlaybackProgress
 import io.github.hobin66.webdavplayer.channel.webdav.model.WebdavResource
 import io.github.hobin66.webdavplayer.common.LibraryOrderingConfiguration
 import io.github.hobin66.webdavplayer.common.LibraryOrderingDirection
@@ -230,6 +231,75 @@ class WebdavMediaChannel
       return OperationResult.Success(Unit)
     }
 
+    suspend fun uploadPlaybackProgress(
+      progressByBookId: Map<String, WebdavPlaybackProgress>,
+      onProgress: (WebdavRefreshProgress) -> Unit = {},
+    ): OperationResult<Unit> =
+      metadataMutationMutex.withLock {
+        val books = ensureManageIndexedBooksLocked(forceRefresh = false).values.filter { it.isAdded }
+        val initialProgress = WebdavRefreshProgress.start(totalBooks = books.size)
+        onProgress(initialProgress)
+
+        var progress = initialProgress
+        books.forEach { book ->
+          when (val result = updateRemoteBookProgress(book, progressByBookId[book.metadata.id])) {
+            is OperationResult.Success -> {
+              progress = progress.advance()
+              onProgress(progress)
+            }
+
+            is OperationResult.Error -> {
+              return@withLock OperationResult.Error(result.code, result.message)
+            }
+          }
+        }
+
+        OperationResult.Success(Unit)
+      }
+
+    suspend fun fetchRemotePlaybackProgress(
+      onProgress: (WebdavRefreshProgress) -> Unit = {},
+    ): OperationResult<List<WebdavRemotePlaybackProgress>> =
+      metadataMutationMutex.withLock {
+        val books = ensureManageIndexedBooksLocked(forceRefresh = false).values.filter { it.isAdded }
+        val initialProgress = WebdavRefreshProgress.start(totalBooks = books.size)
+        onProgress(initialProgress)
+
+        var progress = initialProgress
+        val items = mutableListOf<WebdavRemotePlaybackProgress>()
+        books.forEach { book ->
+          when (val result = readFreshPrimaryMetadata(book)) {
+            is OperationResult.Success -> {
+              val metadata = result.data.metadata
+              putIndexedBook(
+                book.copy(
+                  metadata = metadata,
+                  metadataEtag = result.data.eTag,
+                  metadataLastModified = result.data.lastModified,
+                  metadataPath = result.data.metadataPath,
+                ),
+              )
+              items.add(
+                WebdavRemotePlaybackProgress(
+                  bookId = metadata.id,
+                  title = metadata.title,
+                  author = metadata.authorOrNull(),
+                  progress = metadata.progress,
+                ),
+              )
+              progress = progress.advance()
+              onProgress(progress)
+            }
+
+            is OperationResult.Error -> {
+              return@withLock OperationResult.Error(result.code, result.message)
+            }
+          }
+        }
+
+        OperationResult.Success(items)
+      }
+
     override suspend fun fetchLibraries(): OperationResult<List<Library>> =
       OperationResult.Success(
         listOf(
@@ -383,6 +453,7 @@ class WebdavMediaChannel
                           directory = directory,
                           metadataEtag = metadataResolution.eTag,
                           metadataLastModified = metadataResolution.lastModified,
+                          metadataPath = metadataResolution.metadataPath,
                           coverEtag = coverValidation.eTag,
                           coverLastModified = coverValidation.lastModified,
                           resolvedCoverName = null,
@@ -451,6 +522,7 @@ class WebdavMediaChannel
               directory = directory,
               metadataEtag = metadataResolution.eTag,
               metadataLastModified = metadataResolution.lastModified,
+              metadataPath = metadataResolution.metadataPath,
               coverEtag = null,
               coverLastModified = null,
               resolvedCoverName = null,
@@ -537,22 +609,37 @@ class WebdavMediaChannel
           )
         }
 
-    private fun indexedBookComparator(
-      ordering: LibraryOrderingConfiguration,
-    ): Comparator<IndexedBook> {
+    private fun indexedBookComparator(ordering: LibraryOrderingConfiguration): Comparator<IndexedBook> {
       val primaryComparator =
         when (ordering.option) {
-          LibraryOrderingOption.TITLE ->
+          LibraryOrderingOption.TITLE -> {
             compareBy<IndexedBook> { it.metadata.title.lowercase() }
-          LibraryOrderingOption.AUTHOR ->
-            compareBy<IndexedBook> { it.metadata.authorOrNull()?.lowercase().orEmpty() }
-              .thenBy { it.metadata.title.lowercase() }
-          LibraryOrderingOption.CREATED_AT ->
+          }
+
+          LibraryOrderingOption.AUTHOR -> {
+            compareBy<IndexedBook> {
+              it
+                .metadata
+                .authorOrNull()
+                ?.lowercase()
+                .orEmpty()
+            }.thenBy {
+              it
+                .metadata
+                .title
+                .lowercase()
+            }
+          }
+
+          LibraryOrderingOption.CREATED_AT -> {
             compareBy<IndexedBook> { parseTimestamp(it.directory.lastModified) }
               .thenBy { it.metadata.title.lowercase() }
-          LibraryOrderingOption.UPDATED_AT ->
+          }
+
+          LibraryOrderingOption.UPDATED_AT -> {
             compareBy<IndexedBook> { parseTimestamp(it.directory.lastModified) }
               .thenBy { it.metadata.title.lowercase() }
+          }
         }
 
       return when (ordering.direction) {
@@ -620,6 +707,7 @@ class WebdavMediaChannel
                           directory = directory,
                           metadataEtag = metadataResolution.eTag,
                           metadataLastModified = metadataResolution.lastModified,
+                          metadataPath = metadataResolution.metadataPath,
                           coverEtag = coverValidation.eTag,
                           coverLastModified = coverValidation.lastModified,
                           resolvedCoverName = if (force) null else persisted?.resolvedCoverName,
@@ -677,12 +765,15 @@ class WebdavMediaChannel
           metadata = created,
           eTag = null,
           lastModified = null,
+          metadataPath = "${directory.relativePath}/$BOOK_METADATA_FILE_NAME",
+          exists = true,
         )
       }
 
       return resolveMetadataConditionally(
-        conditionalResult = readMetadataConditionally(metadataPath, previous),
+        conditionalResult = readMetadataConditionally(metadataPath, previousForMetadataPath(previous, metadataPath)),
         previous = previous,
+        metadataPath = metadataPath,
         onMissing = {
           ensureBookMetadataFromCandidates(
             directory = directory,
@@ -706,6 +797,7 @@ class WebdavMediaChannel
     private suspend fun resolveMetadataConditionally(
       conditionalResult: OperationResult<ConditionalTextResponse>,
       previous: WebdavBookIndexEntry?,
+      metadataPath: String,
       onMissing: suspend () -> MetadataResolution?,
     ): MetadataResolution? =
       conditionalResult.foldAsync(
@@ -719,6 +811,8 @@ class WebdavMediaChannel
                     metadata = it,
                     eTag = previous.metadataEtag ?: conditional.eTag,
                     lastModified = previous.metadataLastModified ?: conditional.lastModified,
+                    metadataPath = previous.metadataPath ?: metadataPath,
+                    exists = true,
                   )
                 }
             }
@@ -730,6 +824,8 @@ class WebdavMediaChannel
                   metadata = it,
                   eTag = conditional.eTag,
                   lastModified = conditional.lastModified,
+                  metadataPath = metadataPath,
+                  exists = true,
                 )
               }
             }
@@ -747,10 +843,15 @@ class WebdavMediaChannel
                 metadata = it,
                 eTag = previous.metadataEtag,
                 lastModified = previous.metadataLastModified,
+                metadataPath = previous.metadataPath ?: metadataPath,
+                exists = true,
               )
             }
         },
       )
+
+    private fun previousForMetadataPath(previous: WebdavBookIndexEntry?, metadataPath: String): WebdavBookIndexEntry? =
+      previous?.takeIf { it.metadataPath == metadataPath }
 
     private suspend fun resolveCoverValidation(
       directory: WebdavResource,
@@ -969,6 +1070,7 @@ class WebdavMediaChannel
         cover = coverName,
         introSkipSeconds = introSkipSeconds,
         outroSkipSeconds = outroSkipSeconds,
+        progress = progress,
       )
 
     private fun WebdavBookIndexEntry.toIndexedBook(): IndexedBook =
@@ -986,6 +1088,7 @@ class WebdavMediaChannel
           ),
         metadataEtag = metadataEtag,
         metadataLastModified = metadataLastModified,
+        metadataPath = metadataPath,
         coverEtag = coverEtag,
         coverLastModified = coverLastModified,
         resolvedCoverName = resolvedCoverName,
@@ -1005,10 +1108,12 @@ class WebdavMediaChannel
         coverName = metadata.coverOrDefault(),
         metadataEtag = metadataEtag,
         metadataLastModified = metadataLastModified,
+        metadataPath = metadataPath,
         coverEtag = coverEtag,
         coverLastModified = coverLastModified,
         introSkipSeconds = metadata.introSkipSecondsOrDefault(),
         outroSkipSeconds = metadata.outroSkipSecondsOrDefault(),
+        progress = metadata.progress,
         resolvedCoverName = resolvedCoverName,
         isCoverMissing = isCoverMissing,
         isAdded = isAdded,
@@ -1030,7 +1135,136 @@ class WebdavMediaChannel
         cachedBooks
           .toMutableMap()
           .apply { put(updated.metadata.id, updated) }
+      addedBooksSortedCache = null
       persistentCache.saveBookIndex(cachedBooks.values.map { it.toIndexEntry() })
+    }
+
+    private suspend fun updateRemoteBookProgress(
+      book: IndexedBook,
+      progress: WebdavPlaybackProgress?,
+    ): OperationResult<Unit> {
+      val metadataResult = readFreshPrimaryMetadata(book)
+      if (metadataResult is OperationResult.Error) {
+        return OperationResult.Error(metadataResult.code, metadataResult.message)
+      }
+
+      val metadataResolution = (metadataResult as OperationResult.Success).data
+      val metadataPath = "${book.directory.relativePath}/$BOOK_METADATA_FILE_NAME"
+      val updatedMetadata = metadataResolution.metadata.copy(progress = progress)
+      val content = metadataAdapter.toJson(updatedMetadata)
+      val writeResult =
+        when (metadataResolution.exists) {
+          true -> {
+            val hasOverwriteCondition =
+              !metadataResolution.eTag.isNullOrBlank() ||
+                !metadataResolution.lastModified.isNullOrBlank()
+
+            when (hasOverwriteCondition) {
+              true -> {
+                webdavClient.putText(
+                  relativePath = metadataPath,
+                  content = content,
+                  knownEtag = metadataResolution.eTag,
+                  knownLastModified = metadataResolution.lastModified,
+                )
+              }
+
+              false -> {
+                webdavClient.putTextOverwrite(
+                  relativePath = metadataPath,
+                  content = content,
+                )
+              }
+            }
+          }
+
+          false -> {
+            webdavClient.putTextOverwrite(
+              relativePath = metadataPath,
+              content = content,
+            )
+          }
+        }
+
+      return writeResult.foldAsync(
+        onSuccess = { response ->
+          val updatedBook =
+            book.copy(
+              metadata = updatedMetadata,
+              metadataEtag = response.eTag,
+              metadataLastModified = response.lastModified,
+              metadataPath = metadataPath,
+            )
+          putIndexedBook(updatedBook)
+          persistentCache.removeBookDetail(book.metadata.id)
+          OperationResult.Success(Unit)
+        },
+        onFailure = { OperationResult.Error(it.code, it.message) },
+      )
+    }
+
+    private suspend fun readFreshPrimaryMetadata(book: IndexedBook): OperationResult<MetadataResolution> {
+      val metadataPath = "${book.directory.relativePath}/$BOOK_METADATA_FILE_NAME"
+      val previous = book.toIndexEntry().takeIf { book.metadataPath == metadataPath }
+
+      return readMetadataConditionally(metadataPath, previous).foldAsync(
+        onSuccess = { conditional ->
+          when (conditional.status) {
+            ConditionalFetchStatus.NOT_MODIFIED -> {
+              OperationResult.Success(
+                MetadataResolution(
+                  metadata = book.metadata,
+                  eTag = conditional.eTag ?: book.metadataEtag,
+                  lastModified = conditional.lastModified ?: book.metadataLastModified,
+                  metadataPath = metadataPath,
+                  exists = true,
+                ),
+              )
+            }
+
+            ConditionalFetchStatus.UPDATED -> {
+              val metadata =
+                conditional.content
+                  ?.let { parseMetadataOrNull(it) }
+                  ?: return@foldAsync OperationResult.Error(OperationError.InternalError)
+
+              OperationResult.Success(
+                MetadataResolution(
+                  metadata = metadata,
+                  eTag = conditional.eTag,
+                  lastModified = conditional.lastModified,
+                  metadataPath = metadataPath,
+                  exists = true,
+                ),
+              )
+            }
+
+            ConditionalFetchStatus.NOT_FOUND -> {
+              OperationResult.Success(
+                MetadataResolution(
+                  metadata =
+                    WebdavBookMetadata(
+                      version = 1,
+                      id = book.metadata.id,
+                      title = book.metadata.title,
+                      author = book.metadata.authorOrNull(),
+                      description = book.metadata.descriptionOrNull(),
+                      cover = book.metadata.coverOrDefault(),
+                      introSkipSeconds = book.metadata.introSkipSecondsOrDefault(),
+                      outroSkipSeconds = book.metadata.outroSkipSecondsOrDefault(),
+                      progress = book.metadata.progress,
+                    ),
+                  eTag = null,
+                  lastModified = null,
+                  metadataPath = metadataPath,
+                  exists = false,
+                ),
+              )
+            }
+          }
+        },
+        onFailure = { OperationResult.Error(it.code, it.message) },
+      )
     }
 
     private suspend fun clearCachedCoverFiles() {
@@ -1109,6 +1343,7 @@ class WebdavMediaChannel
       val directory: WebdavResource,
       val metadataEtag: String?,
       val metadataLastModified: String?,
+      val metadataPath: String?,
       val coverEtag: String?,
       val coverLastModified: String?,
       val resolvedCoverName: String?,
@@ -1120,6 +1355,8 @@ class WebdavMediaChannel
       val metadata: WebdavBookMetadata,
       val eTag: String?,
       val lastModified: String?,
+      val metadataPath: String,
+      val exists: Boolean,
     )
 
     data class CoverValidation(

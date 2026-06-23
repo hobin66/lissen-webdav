@@ -197,6 +197,8 @@ class CachedBookDaoSkipUpdateTest {
 
     override suspend fun fetchMediaProgress(bookId: String): MediaProgressEntity? = unsupported()
 
+    override suspend fun fetchAllMediaProgress(): List<MediaProgressEntity> = unsupported()
+
     override suspend fun deleteBook(book: BookEntity) = unsupported()
 
     override suspend fun deleteMediaProgress(bookId: String) = unsupported()

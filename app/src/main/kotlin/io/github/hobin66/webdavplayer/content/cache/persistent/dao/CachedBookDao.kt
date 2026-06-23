@@ -240,6 +240,9 @@ interface CachedBookDao {
   @Query("SELECT * FROM media_progress WHERE bookId = :bookId")
   suspend fun fetchMediaProgress(bookId: String): MediaProgressEntity?
 
+  @Query("SELECT * FROM media_progress")
+  suspend fun fetchAllMediaProgress(): List<MediaProgressEntity>
+
   @Delete
   suspend fun deleteBook(book: BookEntity)
 

@@ -14,6 +14,7 @@ import io.github.hobin66.webdavplayer.common.ColorScheme
 import io.github.hobin66.webdavplayer.common.LibraryOrderingConfiguration
 import io.github.hobin66.webdavplayer.common.NetworkTypeAutoCache
 import io.github.hobin66.webdavplayer.common.PlaybackVolumeBoost
+import io.github.hobin66.webdavplayer.content.PlaybackProgressSyncDirection
 import io.github.hobin66.webdavplayer.content.WebdavMediaProvider
 import io.github.hobin66.webdavplayer.lib.domain.DownloadOption
 import io.github.hobin66.webdavplayer.lib.domain.Library
@@ -143,6 +144,36 @@ class SettingsViewModel
       }
     }
 
+    fun syncPlaybackProgress(direction: PlaybackProgressSyncDirection) {
+      if (_webdavRefreshInProgress.value == true) {
+        return
+      }
+
+      viewModelScope.launch {
+        _webdavRefreshInProgress.postValue(true)
+        _webdavRefreshProgress.postValue(WebdavRefreshProgress.start(totalBooks = 0))
+
+        when (
+          val result =
+            mediaChannel.syncPlaybackProgress(direction) { progress ->
+              _webdavRefreshProgress.postValue(progress)
+            }
+        ) {
+          is OperationResult.Success<*> -> {
+            _webdavRefreshMessageRes.postValue(R.string.settings_sync_playback_progress_success)
+            fetchLibraries()
+          }
+
+          is OperationResult.Error<*> -> {
+            _webdavRefreshMessageRes.postValue(R.string.settings_sync_playback_progress_failed)
+          }
+        }
+
+        _webdavRefreshInProgress.postValue(false)
+        _webdavRefreshProgress.postValue(null)
+      }
+    }
+
     fun refreshWebdavItemCache(itemId: String) {
       viewModelScope.launch {
         mediaChannel.refreshItemCache(itemId)
@@ -150,6 +181,8 @@ class SettingsViewModel
     }
 
     fun canRefreshWebdavCache(): Boolean = mediaChannel.canRefreshRemoteCache()
+
+    fun canSyncPlaybackProgress(): Boolean = mediaChannel.canSyncPlaybackProgress()
 
     fun consumeWebdavRefreshMessage() {
       _webdavRefreshMessageRes.postValue(null)

@@ -288,6 +288,44 @@ class WebdavClient
         )
       }
 
+    suspend fun putTextOverwrite(
+      relativePath: String,
+      content: String,
+    ): OperationResult<PutTextResponse> =
+      withContext(Dispatchers.IO) {
+        val safeHost = preferences.getHost() ?: return@withContext OperationResult.Error(OperationError.MissingCredentialsHost)
+        val rootPath = preferences.getWebdavRoot() ?: "/"
+
+        val uri =
+          resolveUri(host = safeHost, rootPath = rootPath, relativePath = relativePath)
+            ?: return@withContext OperationResult.Error(OperationError.InvalidCredentialsHost)
+
+        val request =
+          Request
+            .Builder()
+            .url(uri.toString())
+            .put(content.toRequestBody("application/json".toMediaType()))
+            .build()
+
+        executeRequest(request, authOverride = null).foldAsync(
+          onSuccess = { response ->
+            response.use {
+              if (!isSuccessfulPutTextStatusCode(it.code)) {
+                return@foldAsync OperationResult.Error(mapOverwriteResponseCode(it.code))
+              }
+
+              OperationResult.Success(
+                PutTextResponse(
+                  eTag = findHeaderIgnoreCase(it.headers.toMultimap(), "ETag"),
+                  lastModified = findHeaderIgnoreCase(it.headers.toMultimap(), "Last-Modified"),
+                ),
+              )
+            }
+          },
+          onFailure = { OperationResult.Error(it.code) },
+        )
+      }
+
     suspend fun putText(
       relativePath: String,
       content: String,

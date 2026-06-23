@@ -13,6 +13,7 @@ import io.github.hobin66.webdavplayer.content.cache.persistent.dao.CachedBookDao
 import io.github.hobin66.webdavplayer.content.cache.persistent.entity.MediaProgressEntity
 import io.github.hobin66.webdavplayer.lib.domain.Book
 import io.github.hobin66.webdavplayer.lib.domain.DetailedItem
+import io.github.hobin66.webdavplayer.lib.domain.MediaProgress
 import io.github.hobin66.webdavplayer.lib.domain.PlaybackProgress
 import io.github.hobin66.webdavplayer.lib.domain.PlayingChapter
 import io.github.hobin66.webdavplayer.lib.domain.RecentBook
@@ -160,6 +161,30 @@ class CachedBookRepository
       bookDao
         .fetchMediaProgress(playingItemId)
         ?.let { mediaProgressEntityConverter.apply(it) }
+
+    suspend fun fetchAllMediaProgress(): Map<String, MediaProgress> =
+      bookDao
+        .fetchAllMediaProgress()
+        .associate { it.bookId to mediaProgressEntityConverter.apply(it) }
+
+    suspend fun updateMediaProgress(
+      bookId: String,
+      progress: MediaProgress?,
+    ) {
+      if (progress == null) {
+        bookDao.deleteMediaProgress(bookId)
+        return
+      }
+
+      bookDao.upsertMediaProgress(
+        MediaProgressEntity(
+          bookId = bookId,
+          currentTime = progress.currentTime,
+          isFinished = progress.isFinished,
+          lastUpdate = progress.lastUpdate,
+        ),
+      )
+    }
 
     suspend fun syncProgress(
       playingItem: DetailedItem,

@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import io.github.hobin66.webdavplayer.R
+import io.github.hobin66.webdavplayer.content.PlaybackProgressSyncDirection
 import io.github.hobin66.webdavplayer.ui.navigation.AppNavigationService
 import io.github.hobin66.webdavplayer.ui.screens.settings.composable.DisconnectServerComposable
 import io.github.hobin66.webdavplayer.ui.screens.settings.composable.ServerInfoComposable
@@ -59,6 +60,8 @@ fun ConnectionSettingsScreen(
 
   val context = LocalContext.current
   var refreshConfirmationVisible by remember { mutableStateOf(false) }
+  var syncDirectionSheetVisible by remember { mutableStateOf(false) }
+  var pendingSyncDirection by remember { mutableStateOf<PlaybackProgressSyncDirection?>(null) }
 
   BackHandler(enabled = webdavRefreshInProgress) {}
 
@@ -82,10 +85,10 @@ fun ConnectionSettingsScreen(
             onClick = { onBack() },
             enabled = !webdavRefreshInProgress,
           ) {
-              Icon(
-                imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
-                contentDescription = stringResource(R.string.common_back),
-              )
+            Icon(
+              imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
+              contentDescription = stringResource(R.string.common_back),
+            )
           }
         },
       )
@@ -127,6 +130,14 @@ fun ConnectionSettingsScreen(
           }
 
           false -> {
+            if (viewModel.canSyncPlaybackProgress()) {
+              AdvancedSettingsSimpleItemComposable(
+                title = stringResource(R.string.settings_sync_playback_progress_title),
+                description = stringResource(R.string.settings_sync_playback_progress_description),
+                onclick = { syncDirectionSheetVisible = true },
+              )
+            }
+
             AdvancedSettingsSimpleItemComposable(
               title = stringResource(R.string.settings_refresh_webdav_cache_title),
               description = stringResource(R.string.settings_refresh_webdav_cache_description),
@@ -161,6 +172,83 @@ fun ConnectionSettingsScreen(
       },
       dismissButton = {
         TextButton(onClick = { refreshConfirmationVisible = false }) {
+          Text(text = stringResource(android.R.string.cancel))
+        }
+      },
+    )
+  }
+
+  if (syncDirectionSheetVisible) {
+    AlertDialog(
+      onDismissRequest = { syncDirectionSheetVisible = false },
+      title = { Text(text = stringResource(R.string.settings_sync_playback_progress_title)) },
+      text = { Text(text = stringResource(R.string.settings_sync_playback_progress_choose_direction_message)) },
+      confirmButton = {
+        TextButton(
+          onClick = {
+            syncDirectionSheetVisible = false
+            pendingSyncDirection = PlaybackProgressSyncDirection.LOCAL_TO_REMOTE
+          },
+        ) {
+          Text(text = stringResource(R.string.settings_sync_playback_progress_local_to_remote))
+        }
+      },
+      dismissButton = {
+        TextButton(
+          onClick = {
+            syncDirectionSheetVisible = false
+            pendingSyncDirection = PlaybackProgressSyncDirection.REMOTE_TO_LOCAL
+          },
+        ) {
+          Text(text = stringResource(R.string.settings_sync_playback_progress_remote_to_local))
+        }
+      },
+    )
+  }
+
+  pendingSyncDirection?.let { direction ->
+    AlertDialog(
+      onDismissRequest = { pendingSyncDirection = null },
+      title = {
+        Text(
+          text =
+            when (direction) {
+              PlaybackProgressSyncDirection.LOCAL_TO_REMOTE -> {
+                stringResource(R.string.settings_sync_playback_progress_local_to_remote)
+              }
+
+              PlaybackProgressSyncDirection.REMOTE_TO_LOCAL -> {
+                stringResource(R.string.settings_sync_playback_progress_remote_to_local)
+              }
+            },
+        )
+      },
+      text = {
+        Text(
+          text =
+            when (direction) {
+              PlaybackProgressSyncDirection.LOCAL_TO_REMOTE -> {
+                stringResource(R.string.settings_sync_playback_progress_local_to_remote_confirm_message)
+              }
+
+              PlaybackProgressSyncDirection.REMOTE_TO_LOCAL -> {
+                stringResource(R.string.settings_sync_playback_progress_remote_to_local_confirm_message)
+              }
+            },
+        )
+      },
+      confirmButton = {
+        TextButton(
+          onClick = {
+            pendingSyncDirection = null
+            viewModel.syncPlaybackProgress(direction)
+          },
+        ) {
+          Text(text = stringResource(android.R.string.ok))
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = { pendingSyncDirection = null }) {
           Text(text = stringResource(android.R.string.cancel))
         }
       },
