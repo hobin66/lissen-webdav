@@ -486,6 +486,36 @@ class WebdavMediaProvider
       return result
     }
 
+    suspend fun syncPlaybackProgress(
+      bookId: String,
+      direction: PlaybackProgressSyncDirection,
+    ): OperationResult<Unit> {
+      val channel = providePreferredChannel()
+      if (channel !is WebdavMediaChannel) {
+        return OperationResult.Error(OperationError.UnsupportedError)
+      }
+
+      val result =
+        runCatching {
+          when (direction) {
+            PlaybackProgressSyncDirection.LOCAL_TO_REMOTE -> syncLocalPlaybackProgressToRemote(channel, bookId)
+            PlaybackProgressSyncDirection.REMOTE_TO_LOCAL -> syncRemotePlaybackProgressToLocal(channel, bookId)
+          }
+        }.fold(
+          onSuccess = { it },
+          onFailure = {
+            Timber.e(it, "Unable to sync playback progress for $bookId")
+            OperationResult.Error(OperationError.InternalError)
+          },
+        )
+
+      if (result is OperationResult.Success) {
+        _remoteRefreshVersion.value = System.currentTimeMillis()
+      }
+
+      return result
+    }
+
     suspend fun refreshItemCache(itemId: String): OperationResult<Unit> {
       val channel = providePreferredChannel()
       return when (channel is RefreshableChannel) {
@@ -581,30 +611,29 @@ class WebdavMediaProvider
       )
     }
 
+    private suspend fun syncLocalPlaybackProgressToRemote(
+      channel: WebdavMediaChannel,
+      bookId: String,
+    ): OperationResult<Unit> {
+      val progress =
+        WebdavPlaybackProgress.from(
+          mediaProgress = localCacheRepository.fetchPlayingItemProgress(bookId),
+          snapshot = preferences.getPlaybackSnapshot(bookId),
+        )
+
+      return channel.uploadPlaybackProgress(
+        bookId = bookId,
+        progress = progress,
+      )
+    }
+
     private suspend fun syncRemotePlaybackProgressToLocal(
       channel: WebdavMediaChannel,
       onProgress: (WebdavRefreshProgress) -> Unit,
     ): OperationResult<Unit> =
       channel.fetchRemotePlaybackProgress(onProgress).foldAsync(
         onSuccess = { items ->
-          items.forEach { item ->
-            val progress = item.progress
-            localCacheRepository.updateMediaProgress(
-              bookId = item.bookId,
-              progress = progress?.toMediaProgress(),
-            )
-
-            val snapshot = progress?.toPlaybackSnapshot(item.bookId)
-            when (snapshot) {
-              null -> preferences.deletePlaybackSnapshot(item.bookId)
-              else -> preferences.savePlaybackSnapshot(snapshot)
-            }
-
-            updatePlayingItemProgress(
-              bookId = item.bookId,
-              progress = progress,
-            )
-          }
+          items.forEach { item -> updateLocalPlaybackProgress(item) }
 
           preferences.saveRecentBooks(
             buildRemoteRecentPlayback(
@@ -616,6 +645,44 @@ class WebdavMediaProvider
         },
         onFailure = { OperationResult.Error(it.code, it.message) },
       )
+
+    private suspend fun syncRemotePlaybackProgressToLocal(
+      channel: WebdavMediaChannel,
+      bookId: String,
+    ): OperationResult<Unit> =
+      channel.fetchRemotePlaybackProgress(bookId).foldAsync(
+        onSuccess = { item ->
+          updateLocalPlaybackProgress(item)
+
+          preferences.saveRecentBooks(
+            buildRemoteRecentPlayback(
+              existing = preferences.getRecentBooks(),
+              remoteItems = listOf(item),
+            ),
+          )
+          OperationResult.Success(Unit)
+        },
+        onFailure = { OperationResult.Error(it.code, it.message) },
+      )
+
+    private suspend fun updateLocalPlaybackProgress(item: WebdavRemotePlaybackProgress) {
+      val progress = item.progress
+      localCacheRepository.updateMediaProgress(
+        bookId = item.bookId,
+        progress = progress?.toMediaProgress(),
+      )
+
+      val snapshot = progress?.toPlaybackSnapshot(item.bookId)
+      when (snapshot) {
+        null -> preferences.deletePlaybackSnapshot(item.bookId)
+        else -> preferences.savePlaybackSnapshot(snapshot)
+      }
+
+      updatePlayingItemProgress(
+        bookId = item.bookId,
+        progress = progress,
+      )
+    }
 
     private fun buildRemoteRecentPlayback(
       existing: List<RecentBook>,

@@ -10,6 +10,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
 import io.github.hobin66.webdavplayer.R
 import io.github.hobin66.webdavplayer.channel.common.OperationResult
+import io.github.hobin66.webdavplayer.content.PlaybackProgressSyncDirection
 import io.github.hobin66.webdavplayer.lib.domain.Bookmark
 import io.github.hobin66.webdavplayer.lib.domain.DetailedItem
 import io.github.hobin66.webdavplayer.lib.domain.DurationTimerStopMode
@@ -137,6 +138,31 @@ class PlayerViewModel
       }
     }
 
+    fun syncCurrentBookProgress(
+      bookId: String,
+      direction: PlaybackProgressSyncDirection,
+    ) {
+      if (_bookRefreshInProgress.value == true) {
+        return
+      }
+
+      viewModelScope.launch {
+        _bookRefreshInProgress.postValue(true)
+
+        when (mediaRepository.syncCurrentBookProgress(bookId, direction)) {
+          is OperationResult.Success<*> -> {
+            Unit
+          }
+
+          is OperationResult.Error<*> -> {
+            _bookRefreshMessageRes.postValue(R.string.player_sync_current_book_failed)
+          }
+        }
+
+        _bookRefreshInProgress.postValue(false)
+      }
+    }
+
     fun refreshCurrentBook(bookId: String) {
       if (_bookRefreshInProgress.value == true) {
         return
@@ -151,7 +177,7 @@ class PlayerViewModel
           }
 
           is OperationResult.Error<*> -> {
-            _bookRefreshMessageRes.postValue(R.string.settings_refresh_webdav_cache_failed)
+            _bookRefreshMessageRes.postValue(R.string.player_refresh_current_book_cache_failed)
           }
         }
 

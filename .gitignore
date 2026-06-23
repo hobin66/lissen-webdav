@@ -47,3 +47,5 @@ wechat
 device-logcat.txt
 device-logcat.err.txt
 .worktrees/
+version.properties
+version.properties

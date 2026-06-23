@@ -29,6 +29,7 @@ import kotlinx.coroutines.withContext
 import io.github.hobin66.webdavplayer.R
 import io.github.hobin66.webdavplayer.channel.common.OperationError
 import io.github.hobin66.webdavplayer.channel.common.OperationResult
+import io.github.hobin66.webdavplayer.content.PlaybackProgressSyncDirection
 import io.github.hobin66.webdavplayer.content.WebdavMediaProvider
 import io.github.hobin66.webdavplayer.lib.domain.Bookmark
 import io.github.hobin66.webdavplayer.lib.domain.CurrentItemTimerOption
@@ -439,18 +440,22 @@ class MediaRepository
       preparePlayback(bookId = bookId, forceReload = false)
     }
 
+    suspend fun syncCurrentBookProgress(
+      bookId: String,
+      direction: PlaybackProgressSyncDirection,
+    ): OperationResult<Unit> = mediaChannel.syncPlaybackProgress(bookId, direction)
+
     suspend fun refreshCurrentBook(bookId: String): OperationResult<Unit> {
       _playAfterPrepare.postValue(false)
       pause()
       clearPreparedItem()
 
       val refreshResult = mediaChannel.refreshItemCache(bookId)
-      val prepareResult = preparePlayback(bookId = bookId, forceReload = true)
-
-      return when (refreshResult) {
-        is OperationResult.Success -> prepareResult
-        is OperationResult.Error -> OperationResult.Error(refreshResult.code, refreshResult.message)
+      if (refreshResult is OperationResult.Error) {
+        return OperationResult.Error(refreshResult.code, refreshResult.message)
       }
+
+      return preparePlayback(bookId = bookId, forceReload = true)
     }
 
     suspend fun preparePlayback(

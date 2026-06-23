@@ -257,6 +257,19 @@ class WebdavMediaChannel
         OperationResult.Success(Unit)
       }
 
+    suspend fun uploadPlaybackProgress(
+      bookId: String,
+      progress: WebdavPlaybackProgress?,
+    ): OperationResult<Unit> =
+      metadataMutationMutex.withLock {
+        val book =
+          ensureManageIndexedBooksLocked(forceRefresh = false)[bookId]
+            ?.takeIf { it.isAdded }
+            ?: return@withLock OperationResult.Error(OperationError.NotFoundError)
+
+        updateRemoteBookProgress(book, progress)
+      }
+
     suspend fun fetchRemotePlaybackProgress(
       onProgress: (WebdavRefreshProgress) -> Unit = {},
     ): OperationResult<List<WebdavRemotePlaybackProgress>> =
@@ -298,6 +311,41 @@ class WebdavMediaChannel
         }
 
         OperationResult.Success(items)
+      }
+
+    suspend fun fetchRemotePlaybackProgress(bookId: String): OperationResult<WebdavRemotePlaybackProgress> =
+      metadataMutationMutex.withLock {
+        val book =
+          ensureManageIndexedBooksLocked(forceRefresh = false)[bookId]
+            ?.takeIf { it.isAdded }
+            ?: return@withLock OperationResult.Error(OperationError.NotFoundError)
+
+        when (val result = readFreshPrimaryMetadata(book)) {
+          is OperationResult.Success -> {
+            val metadata = result.data.metadata
+            putIndexedBook(
+              book.copy(
+                metadata = metadata,
+                metadataEtag = result.data.eTag,
+                metadataLastModified = result.data.lastModified,
+                metadataPath = result.data.metadataPath,
+              ),
+            )
+
+            OperationResult.Success(
+              WebdavRemotePlaybackProgress(
+                bookId = metadata.id,
+                title = metadata.title,
+                author = metadata.authorOrNull(),
+                progress = metadata.progress,
+              ),
+            )
+          }
+
+          is OperationResult.Error -> {
+            OperationResult.Error(result.code, result.message)
+          }
+        }
       }
 
     override suspend fun fetchLibraries(): OperationResult<List<Library>> =
