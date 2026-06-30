@@ -18,14 +18,6 @@ import com.google.common.util.concurrent.FutureCallback
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.MoreExecutors
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import io.github.hobin66.webdavplayer.R
 import io.github.hobin66.webdavplayer.channel.common.OperationError
 import io.github.hobin66.webdavplayer.channel.common.OperationResult
@@ -50,6 +42,15 @@ import io.github.hobin66.webdavplayer.playback.service.PlaybackEvents
 import io.github.hobin66.webdavplayer.playback.service.calculateChapterIndex
 import io.github.hobin66.webdavplayer.playback.service.calculateChapterIndexAndPosition
 import io.github.hobin66.webdavplayer.playback.service.calculateChapterPosition
+import io.github.hobin66.webdavplayer.playback.service.resolvePlaybackSnapshotStart
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -443,7 +444,14 @@ class MediaRepository
     suspend fun syncCurrentBookProgress(
       bookId: String,
       direction: PlaybackProgressSyncDirection,
-    ): OperationResult<Unit> = mediaChannel.syncPlaybackProgress(bookId, direction)
+    ): OperationResult<Unit> {
+      val result = mediaChannel.syncPlaybackProgress(bookId, direction)
+      if (result is OperationResult.Success && direction == PlaybackProgressSyncDirection.REMOTE_TO_LOCAL) {
+        applySyncedPlayingItemProgress(bookId)
+      }
+
+      return result
+    }
 
     suspend fun refreshCurrentBook(bookId: String): OperationResult<Unit> {
       _playAfterPrepare.postValue(false)
@@ -593,6 +601,41 @@ class MediaRepository
     private fun updateProgress(detailedItem: DetailedItem) {
       val nextTotalPosition = resolveCurrentTotalPositionSeconds(detailedItem) ?: return
       postIfChanged(_totalPosition, nextTotalPosition)
+    }
+
+    private fun applySyncedPlayingItemProgress(bookId: String) {
+      val syncedBook = preferences.getPlayingItem()?.takeIf { it.id == bookId } ?: return
+      val targetPosition = syncedBook.progress?.currentTime ?: 0.0
+
+      postIfChanged(_playingBook, syncedBook)
+      seekToSyncedProgress(syncedBook, targetPosition)
+      postIfChanged(_totalPosition, targetPosition)
+      updateCurrentTrackData()
+    }
+
+    private fun seekToSyncedProgress(
+      book: DetailedItem,
+      targetPosition: Double,
+    ) {
+      if (usesDirectFileQueue(book) && ::mediaController.isInitialized) {
+        val snapshotStart =
+          resolvePlaybackSnapshotStart(
+            chapters = book.chapters,
+            snapshot = preferences.getPlaybackSnapshot(book.id),
+          )
+
+        if (snapshotStart != null) {
+          seekToDirectQueueTarget(
+            DirectQueueSeekTarget(
+              mediaItemIndex = snapshotStart.chapterIndex,
+              positionMs = (snapshotStart.chapterPosition * 1000).toLong().coerceAtLeast(0L),
+            ),
+          )
+          return
+        }
+      }
+
+      seekTo(targetPosition)
     }
 
     private fun updateProgressLoop(isPlaying: Boolean) {

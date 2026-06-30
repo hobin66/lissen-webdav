@@ -12,8 +12,10 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.SilenceMediaSource
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
-import kotlinx.parcelize.Parcelize
 import io.github.hobin66.webdavplayer.playback.service.PlaybackService.Companion.FILE_SEGMENTS
+import kotlinx.parcelize.Parcelize
+import java.net.URLDecoder
+import java.net.URLEncoder
 
 @Parcelize
 data class FileClip(
@@ -30,20 +32,26 @@ class WebdavPlayerMediaSourceFactory(
     val bookId: String,
     val chapterId: Int,
   ) {
-    override fun toString(): String = "chapter:$bookId:$chapterId"
+    override fun toString(): String = "chapter:${encode(bookId)}:$chapterId"
 
     companion object {
-      private val regex = """chapter:([^/]+):(\d+)$""".toRegex()
+      private val regex = """chapter:([^:]+):(\d+)$""".toRegex()
 
       fun fromString(mediaIdStr: String): MediaId? =
         regex.find(mediaIdStr)?.let {
           it.destructured.let { (bookId, chapterIdStr) ->
             MediaId(
-              bookId = bookId,
+              bookId = decode(bookId) ?: return null,
               chapterId = chapterIdStr.toInt(),
             )
           }
         }
+
+      private fun encode(value: String): String = URLEncoder.encode(value, Charsets.UTF_8.name())
+
+      private fun decode(value: String): String? =
+        runCatching { URLDecoder.decode(value, Charsets.UTF_8.name()) }
+          .getOrNull()
     }
   }
 

@@ -41,20 +41,6 @@ class WebdavCachePolicyTest {
   }
 
   @Test
-  fun `filters library list to added books only`() {
-    val books =
-      listOf(
-        indexEntry(bookId = "a", isAdded = true),
-        indexEntry(bookId = "b", isAdded = false),
-        indexEntry(bookId = "c", isAdded = true),
-      )
-
-    val filtered = filterAddedBooks(books)
-
-    assertEquals(listOf("a", "c"), filtered.map { it.bookId })
-  }
-
-  @Test
   fun `marks book as added`() {
     val updated = markBookAdded(indexEntry(isAdded = false))
 

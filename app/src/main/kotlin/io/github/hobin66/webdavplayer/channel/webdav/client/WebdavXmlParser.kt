@@ -3,6 +3,7 @@ package io.github.hobin66.webdavplayer.channel.webdav.client
 import org.w3c.dom.Element
 import org.xml.sax.InputSource
 import java.io.StringReader
+import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilderFactory
 
 data class ParsedWebdavResponse(
@@ -19,11 +20,22 @@ object WebdavXmlParser {
     val documentBuilderFactory =
       DocumentBuilderFactory
         .newInstance()
-        .apply { isNamespaceAware = true }
+        .apply {
+          isNamespaceAware = true
+          isExpandEntityReferences = false
+          enableFeature(XMLConstants.FEATURE_SECURE_PROCESSING)
+          enableFeature("http://apache.org/xml/features/disallow-doctype-decl")
+          enableFeature("http://xml.org/sax/features/external-general-entities", enabled = false)
+          enableFeature("http://xml.org/sax/features/external-parameter-entities", enabled = false)
+          enableFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", enabled = false)
+          blockExternalAccess("http://javax.xml.XMLConstants/property/accessExternalDTD")
+          blockExternalAccess("http://javax.xml.XMLConstants/property/accessExternalSchema")
+        }
 
     val document =
       documentBuilderFactory
         .newDocumentBuilder()
+        .apply { setEntityResolver { _, _ -> InputSource(StringReader("")) } }
         .parse(InputSource(StringReader(xml)))
 
     val responses = mutableListOf<ParsedWebdavResponse>()
@@ -82,5 +94,16 @@ object WebdavXmlParser {
     }
 
     return responses
+  }
+
+  private fun DocumentBuilderFactory.enableFeature(
+    feature: String,
+    enabled: Boolean = true,
+  ) {
+    runCatching { setFeature(feature, enabled) }
+  }
+
+  private fun DocumentBuilderFactory.blockExternalAccess(attribute: String) {
+    runCatching { setAttribute(attribute, "") }
   }
 }

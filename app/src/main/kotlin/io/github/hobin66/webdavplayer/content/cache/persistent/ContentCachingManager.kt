@@ -3,15 +3,12 @@ package io.github.hobin66.webdavplayer.content.cache.persistent
 import android.content.Context
 import android.net.Uri
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.withContext
-import okhttp3.Request
 import io.github.hobin66.webdavplayer.channel.common.MediaChannel
 import io.github.hobin66.webdavplayer.channel.common.createOkHttpClient
 import io.github.hobin66.webdavplayer.common.copyTo
 import io.github.hobin66.webdavplayer.content.cache.common.findRelatedFiles
+import io.github.hobin66.webdavplayer.content.cache.common.replaceAtomically
+import io.github.hobin66.webdavplayer.content.cache.common.temporarySibling
 import io.github.hobin66.webdavplayer.content.cache.common.withBlur
 import io.github.hobin66.webdavplayer.content.cache.common.writeToFile
 import io.github.hobin66.webdavplayer.content.cache.persistent.api.CachedBookRepository
@@ -22,6 +19,11 @@ import io.github.hobin66.webdavplayer.lib.domain.DetailedItem
 import io.github.hobin66.webdavplayer.lib.domain.DownloadOption
 import io.github.hobin66.webdavplayer.lib.domain.PlayingChapter
 import io.github.hobin66.webdavplayer.persistence.preferences.WebdavPlayerPreferences
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withContext
+import okhttp3.Request
 import timber.log.Timber
 import java.io.File
 import javax.inject.Inject
@@ -181,9 +183,11 @@ class ContentCachingManager
             val body = it.body
             val dest = properties.provideMediaCachePatch(bookId, file.id)
             dest.parentFile?.mkdirs()
+            val temp = dest.temporarySibling()
 
             try {
-              dest.outputStream().use { output ->
+              temp.delete()
+              temp.outputStream().use { output ->
                 body.byteStream().use { input ->
                   var lastReportedSize = 0.0
                   input.copyTo(output) {
@@ -196,7 +200,17 @@ class ContentCachingManager
                   }
                 }
               }
+              if (file.size != null && temp.length() != file.size) {
+                Timber.e("Unable to cache media content: size mismatch for fileId=${file.id}")
+                temp.delete()
+                return@withContext CacheState(CacheStatus.Error)
+              }
+              temp.replaceAtomically(dest)
+            } catch (ex: CancellationException) {
+              temp.delete()
+              throw ex
             } catch (ex: Exception) {
+              temp.delete()
               Timber.e(ex, "Unable to write cache file for fileId=${file.id}")
               return@withContext CacheState(CacheStatus.Error)
             }

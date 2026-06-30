@@ -212,7 +212,6 @@ dependencies {
   
   implementation(libs.androidx.navigation.compose)
   implementation(libs.material)
-  implementation(libs.material3)
   
   implementation(libs.androidx.media3.ffmpeg.decoder)
   implementation(libs.process.phoenix)
@@ -254,7 +253,6 @@ dependencies {
   implementation(libs.androidx.media3.datasource)
   implementation(libs.androidx.media3.database)
   
-  implementation(libs.androidx.localbroadcastmanager)
   implementation(libs.timber)
   
   implementation(libs.androidx.glance)
@@ -274,5 +272,6 @@ dependencies {
 
   androidTestImplementation(libs.androidx.test.ext.junit)
   androidTestImplementation(libs.androidx.test.runner)
+  androidTestImplementation(libs.androidx.room.testing)
   androidTestImplementation(libs.mockk.android)
 }

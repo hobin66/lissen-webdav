@@ -23,11 +23,14 @@ object LocalCacheModule {
   fun provideAppDatabase(
     @ApplicationContext context: Context,
   ): LocalCacheStorage {
-    return Room.databaseBuilder(
-      context = context,
-      klass = LocalCacheStorage::class.java,
-      name = DATABASE_NAME,
-    ).fallbackToDestructiveMigration(dropAllTables = true).build()
+    val builder =
+      Room.databaseBuilder(
+        context = context,
+        klass = LocalCacheStorage::class.java,
+        name = DATABASE_NAME,
+      )
+    builder.addMigrations(LocalCacheStorage.MIGRATION_1_2)
+    return builder.build()
   }
 
   @Provides

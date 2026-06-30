@@ -1,8 +1,8 @@
 package io.github.hobin66.webdavplayer.playback.service
 
 import android.content.Intent
-import androidx.annotation.OptIn
 import android.os.Bundle
+import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.util.UnstableApi
@@ -11,13 +11,6 @@ import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSession.MediaItemsWithStartPosition
 import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.MainScope
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import io.github.hobin66.webdavplayer.content.ExternalCoverProvider
 import io.github.hobin66.webdavplayer.content.WebdavMediaProvider
 import io.github.hobin66.webdavplayer.lib.domain.BookFile
@@ -26,6 +19,13 @@ import io.github.hobin66.webdavplayer.lib.domain.PlayingChapter
 import io.github.hobin66.webdavplayer.lib.domain.TimerOption
 import io.github.hobin66.webdavplayer.persistence.preferences.WebdavPlayerPreferences
 import io.github.hobin66.webdavplayer.playback.MediaLibrarySessionProvider
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import timber.log.Timber
 import javax.inject.Inject
 
@@ -45,9 +45,6 @@ class PlaybackService : MediaLibraryService() {
 
   @Inject
   lateinit var sharedPreferences: WebdavPlayerPreferences
-
-  @Inject
-  lateinit var channelProvider: WebdavMediaProvider
 
   @Inject
   lateinit var playbackTimer: PlaybackTimer
@@ -253,22 +250,17 @@ class PlaybackService : MediaLibraryService() {
     }
   }
 
-    companion object {
-      const val ACTION_PLAY = "io.github.hobin66.webdavplayer.player.service.PLAY"
-      const val ACTION_PAUSE = "io.github.hobin66.webdavplayer.player.service.PAUSE"
-      const val ACTION_STOP_SESSION = "io.github.hobin66.webdavplayer.player.service.STOP_SESSION"
-      const val ACTION_SET_PLAYBACK = "io.github.hobin66.webdavplayer.player.service.SET_PLAYBACK"
+  companion object {
+    const val ACTION_PLAY = "io.github.hobin66.webdavplayer.player.service.PLAY"
+    const val ACTION_PAUSE = "io.github.hobin66.webdavplayer.player.service.PAUSE"
+    const val ACTION_STOP_SESSION = "io.github.hobin66.webdavplayer.player.service.STOP_SESSION"
+    const val ACTION_SET_PLAYBACK = "io.github.hobin66.webdavplayer.player.service.SET_PLAYBACK"
     const val ACTION_SEEK_TO = "io.github.hobin66.webdavplayer.player.service.ACTION_SEEK_TO"
     const val ACTION_SET_TIMER = "io.github.hobin66.webdavplayer.player.service.ACTION_SET_TIMER"
     const val ACTION_CANCEL_TIMER = "io.github.hobin66.webdavplayer.player.service.CANCEL_TIMER"
 
     const val TIMER_VALUE_EXTRA = "io.github.hobin66.webdavplayer.player.service.TIMER_VALUE"
     const val TIMER_OPTION_EXTRA = "io.github.hobin66.webdavplayer.player.service.TIMER_OPTION"
-    const val TIMER_EXPIRED = "io.github.hobin66.webdavplayer.player.service.TIMER_EXPIRED"
-    const val TIMER_TICK = "io.github.hobin66.webdavplayer.player.service.TIMER_TICK"
-
-    const val TIMER_REMAINING = "io.github.hobin66.webdavplayer.player.service.TIMER_REMAINING"
-    const val PLAYBACK_READY = "io.github.hobin66.webdavplayer.player.service.PLAYBACK_READY"
     const val POSITION = "io.github.hobin66.webdavplayer.player.service.POSITION"
 
     const val FILE_SEGMENTS = "io.github.hobin66.webdavplayer.player.service.FILE_SEGMENTS"

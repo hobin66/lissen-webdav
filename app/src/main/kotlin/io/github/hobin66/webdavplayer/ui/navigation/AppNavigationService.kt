@@ -1,8 +1,8 @@
 package io.github.hobin66.webdavplayer.ui.navigation
 
-import android.net.Uri
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
+import java.net.URLEncoder
 
 class AppNavigationService(
   private val host: NavHostController,
@@ -26,13 +26,7 @@ class AppNavigationService(
     bookSubtitle: String?,
     startInstantly: Boolean = false,
   ) {
-    val route =
-      buildString {
-        append("$ROUTE_PLAYER/$bookId")
-        append("?bookTitle=${Uri.encode(bookTitle)}")
-        append("&bookSubtitle=${Uri.encode(bookSubtitle ?: "")}")
-        append("&startInstantly=$startInstantly")
-      }
+    val route = buildPlayerRoute(bookId, bookTitle, bookSubtitle, startInstantly)
     host.navigate(route) { launchSingleTop = true }
   }
 
@@ -59,3 +53,21 @@ class AppNavigationService(
     }
   }
 }
+
+internal fun buildPlayerRoute(
+  bookId: String,
+  bookTitle: String,
+  bookSubtitle: String?,
+  startInstantly: Boolean = false,
+): String =
+  buildString {
+    append("$ROUTE_PLAYER/${routeEncode(bookId)}")
+    append("?bookTitle=${routeEncode(bookTitle)}")
+    append("&bookSubtitle=${routeEncode(bookSubtitle ?: "")}")
+    append("&startInstantly=$startInstantly")
+  }
+
+private fun routeEncode(value: String): String =
+  URLEncoder
+    .encode(value, Charsets.UTF_8.name())
+    .replace("+", "%20")

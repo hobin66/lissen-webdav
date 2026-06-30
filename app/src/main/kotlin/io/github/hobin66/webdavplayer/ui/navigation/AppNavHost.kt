@@ -63,7 +63,7 @@ fun AppNavHost(
       }
 
       appLaunchAction == AppLaunchAction.CONTINUE_PLAYBACK && book != null -> {
-        "$ROUTE_PLAYER/${book.id}?bookTitle=${book.title}&bookSubtitle=${book.subtitle}&startInstantly=true"
+        buildPlayerRoute(book.id, book.title, book.subtitle, startInstantly = true)
       }
 
       else -> {

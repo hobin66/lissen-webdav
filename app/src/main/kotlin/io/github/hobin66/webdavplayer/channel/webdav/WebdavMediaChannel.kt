@@ -1,13 +1,6 @@
 package io.github.hobin66.webdavplayer.channel.webdav
 
 import android.net.Uri
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.withPermit
 import io.github.hobin66.webdavplayer.channel.common.ConnectionHost
 import io.github.hobin66.webdavplayer.channel.common.ConnectionInfo
 import io.github.hobin66.webdavplayer.channel.common.MediaChannel
@@ -40,6 +33,13 @@ import io.github.hobin66.webdavplayer.lib.domain.PagedItems
 import io.github.hobin66.webdavplayer.lib.domain.PlayingChapter
 import io.github.hobin66.webdavplayer.lib.domain.RecentBook
 import io.github.hobin66.webdavplayer.persistence.preferences.WebdavPlayerPreferences
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import timber.log.Timber
 import java.nio.charset.StandardCharsets
 import java.time.ZonedDateTime
@@ -390,10 +390,16 @@ class WebdavMediaChannel
       val indexedBook = ensureIndexedBooks()[bookId] ?: return OperationResult.Error(OperationError.NotFoundError)
       val cachedDetail = persistentCache.readBookDetail(bookId)
 
-      cachedDetail
-        ?.let {
+      if (cachedDetail != null) {
+        if (
+          shouldUseCachedWebdavDetail(
+            cache = cachedDetail,
+            directoryEtag = indexedBook.directory.eTag,
+            directoryLastModified = indexedBook.directory.lastModified,
+          )
+        ) {
           return OperationResult.Success(
-            it.item.copy(
+            cachedDetail.item.copy(
               id = indexedBook.metadata.id,
               title = indexedBook.metadata.title,
               author = indexedBook.metadata.authorOrNull(),
@@ -406,6 +412,9 @@ class WebdavMediaChannel
             ),
           )
         }
+
+        persistentCache.removeBookDetail(bookId)
+      }
 
       val filesResult =
         webdavClient
@@ -898,8 +907,10 @@ class WebdavMediaChannel
         },
       )
 
-    private fun previousForMetadataPath(previous: WebdavBookIndexEntry?, metadataPath: String): WebdavBookIndexEntry? =
-      previous?.takeIf { it.metadataPath == metadataPath }
+    private fun previousForMetadataPath(
+      previous: WebdavBookIndexEntry?,
+      metadataPath: String,
+    ): WebdavBookIndexEntry? = previous?.takeIf { it.metadataPath == metadataPath }
 
     private suspend fun resolveCoverValidation(
       directory: WebdavResource,
@@ -1063,11 +1074,6 @@ class WebdavMediaChannel
         currentLastModified = currentDirectory.lastModified,
       )
     }
-
-    private fun isDetailCacheValid(
-      cache: WebdavBookDetailCache,
-      directory: WebdavResource,
-    ): Boolean = isValidationSame(cache.directoryEtag, cache.directoryLastModified, directory.eTag, directory.lastModified)
 
     private fun isValidationChanged(
       previousEtag: String?,

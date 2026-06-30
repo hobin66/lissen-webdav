@@ -6,14 +6,14 @@ import android.os.Build
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.onCompletion
-import kotlinx.coroutines.launch
 import io.github.hobin66.webdavplayer.content.WebdavMediaProvider
 import io.github.hobin66.webdavplayer.content.cache.persistent.ContentCachingNotificationService.Companion.NOTIFICATION_ID
 import io.github.hobin66.webdavplayer.lib.domain.CacheStatus
 import io.github.hobin66.webdavplayer.lib.domain.ContentCachingTask
 import io.github.hobin66.webdavplayer.lib.domain.DetailedItem
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.launch
 import timber.log.Timber
 import javax.inject.Inject
 
@@ -101,12 +101,13 @@ class ContentCachingService : LifecycleService() {
     val job =
       lifecycleScope.launch {
         val executor =
-          ContentCachingExecutor(
-            item = item,
-            options = task.options,
-            position = task.currentPosition,
-            contentCachingManager = contentCachingManager,
-          )
+          contentCachingManager
+            .cacheMediaItem(
+              mediaItem = item,
+              option = task.options,
+              channel = mediaProvider.providePreferredChannel(),
+              currentTotalPosition = task.currentPosition,
+            )
 
         when {
           Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
@@ -126,7 +127,6 @@ class ContentCachingService : LifecycleService() {
         }
 
         executor
-          .run(mediaProvider.providePreferredChannel())
           .onCompletion {
             if (executionStatuses.isEmpty()) {
               finish()

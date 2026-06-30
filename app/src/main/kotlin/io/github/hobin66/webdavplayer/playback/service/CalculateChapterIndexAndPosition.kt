@@ -43,6 +43,6 @@ fun calculateChapterIndexAndPosition(
   return if (result == chapters.size - 1 && overallPosition >= chapters[result].end - 0.1) {
     ChapterPosition(chapters.size - 1, 0.0)
   } else {
-    ChapterPosition(result, overallPosition - chapters[result].start)
+    ChapterPosition(result, (overallPosition - chapters[result].start).coerceAtLeast(0.0))
   }
 }

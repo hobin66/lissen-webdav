@@ -5,12 +5,12 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import io.mockk.mockk
 import io.github.hobin66.webdavplayer.content.ExternalCoverProvider
 import io.github.hobin66.webdavplayer.playback.service.FileClip
-import io.github.hobin66.webdavplayer.playback.service.WebdavPlayerMediaSourceFactory
 import io.github.hobin66.webdavplayer.playback.service.PlaybackService.Companion.CHAPTER_START_MS
 import io.github.hobin66.webdavplayer.playback.service.PlaybackService.Companion.FILE_SEGMENTS
+import io.github.hobin66.webdavplayer.playback.service.WebdavPlayerMediaSourceFactory
+import io.mockk.mockk
 import org.junit.Assert.assertNotNull
 import org.junit.Before
 import org.junit.Test

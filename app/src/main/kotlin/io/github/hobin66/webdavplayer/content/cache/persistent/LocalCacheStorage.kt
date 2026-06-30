@@ -2,6 +2,8 @@ package io.github.hobin66.webdavplayer.content.cache.persistent
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import io.github.hobin66.webdavplayer.content.cache.persistent.dao.CachedBookDao
 import io.github.hobin66.webdavplayer.content.cache.persistent.dao.CachedBookSkipSettingsDao
 import io.github.hobin66.webdavplayer.content.cache.persistent.dao.CachedBookmarkDao
@@ -35,4 +37,14 @@ abstract class LocalCacheStorage : RoomDatabase() {
   abstract fun cachedBookmarkDao(): CachedBookmarkDao
 
   abstract fun cachedLibraryDao(): CachedLibraryDao
+
+  companion object {
+    val MIGRATION_1_2: Migration =
+      object : Migration(1, 2) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+          db.execSQL("ALTER TABLE `cached_bookmark` ADD COLUMN `chapterId` TEXT")
+          db.execSQL("ALTER TABLE `cached_bookmark` ADD COLUMN `chapterPosition` REAL")
+        }
+      }
+  }
 }

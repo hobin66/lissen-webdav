@@ -2,8 +2,8 @@ package io.github.hobin66.webdavplayer.playback
 
 import android.content.Context
 import android.content.Intent
-import android.os.Bundle
 import android.os.Build
+import android.os.Bundle
 import android.util.LruCache
 import android.view.KeyEvent
 import android.view.KeyEvent.KEYCODE_MEDIA_NEXT
@@ -23,16 +23,16 @@ import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.DelicateCoroutinesApi
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
 import io.github.hobin66.webdavplayer.R
 import io.github.hobin66.webdavplayer.content.WebdavMediaProvider
 import io.github.hobin66.webdavplayer.persistence.preferences.WebdavPlayerPreferences
 import io.github.hobin66.webdavplayer.playback.service.PlaybackService
 import io.github.hobin66.webdavplayer.playback.service.PlaybackSynchronizationService
 import io.github.hobin66.webdavplayer.util.listenableFuture
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -229,12 +229,7 @@ class MediaLibrarySessionCallback
       query: String,
       params: MediaLibraryService.LibraryParams?,
     ): ListenableFuture<LibraryResult<Void>> {
-      val searchFuture =
-        synchronized(searchCache) {
-          searchCache.get(query) ?: libraryTree
-            .searchBooks(query)
-            .also { searchCache.put(query, it) }
-        }
+      val searchFuture = searchFutureFor(query)
 
       searchFuture.addListener({
         val resultSetSize =
@@ -257,7 +252,7 @@ class MediaLibrarySessionCallback
       pageSize: Int,
       params: MediaLibraryService.LibraryParams?,
     ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
-      val searchFuture = searchCache.get(query)
+      val searchFuture = searchFutureFor(query)
       return Futures.transform(
         searchFuture,
         { items ->
@@ -268,6 +263,13 @@ class MediaLibrarySessionCallback
         context.mainExecutor,
       )
     }
+
+    private fun searchFutureFor(query: String): ListenableFuture<List<MediaItem>> =
+      synchronized(searchCache) {
+        searchCache.get(query) ?: libraryTree
+          .searchBooks(query)
+          .also { searchCache.put(query, it) }
+      }
 
     companion object {
       internal const val PREV_CHAPTER_COMMAND = "notification_prev_chapter"

@@ -2,12 +2,6 @@ package io.github.hobin66.webdavplayer.channel.webdav.client
 
 import android.net.Uri
 import androidx.core.net.toUri
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import okio.Buffer
 import io.github.hobin66.webdavplayer.channel.common.AuthOverride
 import io.github.hobin66.webdavplayer.channel.common.OperationError
 import io.github.hobin66.webdavplayer.channel.common.OperationResult
@@ -16,6 +10,12 @@ import io.github.hobin66.webdavplayer.channel.webdav.model.WebdavResource
 import io.github.hobin66.webdavplayer.channel.webdav.toWebdavRootRelativePath
 import io.github.hobin66.webdavplayer.lib.domain.fixUriScheme
 import io.github.hobin66.webdavplayer.persistence.preferences.WebdavPlayerPreferences
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okio.Buffer
 import timber.log.Timber
 import java.io.ByteArrayOutputStream
 import javax.inject.Inject
@@ -128,8 +128,9 @@ class WebdavClient
                   relativePath = "",
                 )?.path.orEmpty()
               val resources =
-                WebdavXmlParser
-                  .parseMultistatus(responseBody)
+                runCatching { WebdavXmlParser.parseMultistatus(responseBody) }
+                  .onFailure { cause -> Timber.w(cause, "Unable to parse WebDAV PROPFIND response") }
+                  .getOrElse { return@foldAsync OperationResult.Error(OperationError.NetworkError) }
                   .mapNotNull { parsed ->
                     val absolutePath = normalizeHrefToAbsolutePath(parsed.href)
                     val relative = toWebdavRootRelativePath(absolutePath, rootAbsolutePath) ?: return@mapNotNull null

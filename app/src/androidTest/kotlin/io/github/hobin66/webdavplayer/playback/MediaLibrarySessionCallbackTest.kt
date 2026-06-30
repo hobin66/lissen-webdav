@@ -14,12 +14,6 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.SettableFuture
-import io.mockk.Ordering
-import io.mockk.coEvery
-import io.mockk.every
-import io.mockk.mockk
-import io.mockk.verify
-import kotlinx.coroutines.runBlocking
 import io.github.hobin66.webdavplayer.channel.common.OperationError
 import io.github.hobin66.webdavplayer.channel.common.OperationResult
 import io.github.hobin66.webdavplayer.content.WebdavMediaProvider
@@ -31,6 +25,12 @@ import io.github.hobin66.webdavplayer.persistence.preferences.WebdavPlayerPrefer
 import io.github.hobin66.webdavplayer.playback.service.FileClip
 import io.github.hobin66.webdavplayer.playback.service.PlaybackService.Companion.FILE_SEGMENTS
 import io.github.hobin66.webdavplayer.playback.service.PlaybackSynchronizationService
+import io.mockk.Ordering
+import io.mockk.coEvery
+import io.mockk.every
+import io.mockk.mockk
+import io.mockk.verify
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -139,6 +139,18 @@ class MediaLibrarySessionCallbackTest {
 
     val result = callback.onGetSearchResult(session, controller, "dune", 0, 10, null).get(5, TimeUnit.SECONDS)
     assertEquals(5, result.value!!.size)
+  }
+
+  @Test
+  fun onGetSearchResult_withoutCachedSearch_performsSearch() {
+    val items = listOf(makePlayableMediaItem("book-1"))
+    every { libraryTree.searchBooks("dune") } returns Futures.immediateFuture(items)
+
+    val result = callback.onGetSearchResult(session, controller, "dune", 0, 10, null).get(5, TimeUnit.SECONDS)
+
+    assertEquals(SessionResult.RESULT_SUCCESS, result.resultCode)
+    assertEquals(listOf("book-1"), result.value!!.map { it.mediaId })
+    verify(exactly = 1) { libraryTree.searchBooks("dune") }
   }
 
   @Test

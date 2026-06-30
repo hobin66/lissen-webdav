@@ -18,8 +18,6 @@ fun resolveWebdavIndexSource(
     else -> WebdavIndexSource.EMPTY
   }
 
-fun filterAddedBooks(entries: Collection<WebdavBookIndexEntry>): List<WebdavBookIndexEntry> = entries.filter { it.isAdded }
-
 fun shouldSkipWebdavCoverLookup(entry: WebdavBookIndexEntry): Boolean = entry.isCoverMissing
 
 fun buildWebdavCoverCandidates(

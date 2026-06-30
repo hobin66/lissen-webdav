@@ -25,7 +25,7 @@ data class WebdavBookIndexEntry(
   val metadataPath: String? = null,
   val resolvedCoverName: String? = null,
   val isCoverMissing: Boolean = false,
-  val isAdded: Boolean = false,
+  val isAdded: Boolean = true,
 )
 
 @Keep

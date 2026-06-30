@@ -6,10 +6,6 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.SessionResult
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import io.mockk.coEvery
-import io.mockk.every
-import io.mockk.mockk
-import kotlinx.coroutines.runBlocking
 import io.github.hobin66.webdavplayer.channel.common.OperationError
 import io.github.hobin66.webdavplayer.channel.common.OperationResult
 import io.github.hobin66.webdavplayer.content.WebdavMediaProvider
@@ -23,6 +19,10 @@ import io.github.hobin66.webdavplayer.lib.domain.PagedItems
 import io.github.hobin66.webdavplayer.lib.domain.PlayingChapter
 import io.github.hobin66.webdavplayer.lib.domain.RecentBook
 import io.github.hobin66.webdavplayer.persistence.preferences.WebdavPlayerPreferences
+import io.mockk.coEvery
+import io.mockk.every
+import io.mockk.mockk
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue

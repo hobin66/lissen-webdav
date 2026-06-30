@@ -8,10 +8,6 @@ import android.util.Base64
 import androidx.core.content.edit
 import com.squareup.moshi.Types
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.flow.distinctUntilChanged
 import io.github.hobin66.webdavplayer.common.ColorScheme
 import io.github.hobin66.webdavplayer.common.LibraryOrderingConfiguration
 import io.github.hobin66.webdavplayer.common.NetworkTypeAutoCache
@@ -28,8 +24,11 @@ import io.github.hobin66.webdavplayer.lib.domain.makeDownloadOption
 import io.github.hobin66.webdavplayer.lib.domain.makeId
 import io.github.hobin66.webdavplayer.playback.MediaCodecQueueingMode
 import io.github.hobin66.webdavplayer.playback.service.PlaybackSnapshotRecord
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import java.security.KeyStore
-import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -46,24 +45,12 @@ class WebdavPlayerPreferences
     private val sharedPreferences: SharedPreferences =
       context.getSharedPreferences("webdav_player_secure_prefs", Context.MODE_PRIVATE)
 
-    fun hasCredentials(): Boolean {
-      val host = getHost()
-      val username = getUsername()
-      val password = getPassword()
-      val webdavRoot = getWebdavRoot()
-
-      return try {
-        host != null && username != null && password != null && webdavRoot != null
+    fun hasCredentials(): Boolean =
+      try {
+        getHost() != null && getUsername() != null && getPassword() != null && getWebdavRoot() != null
       } catch (ex: Exception) {
         false
       }
-    }
-
-    fun clearCredentials() {
-      sharedPreferences.edit {
-        remove(KEY_PASSWORD)
-      }
-    }
 
     fun clearPreferences() {
       sharedPreferences.edit {
@@ -103,19 +90,6 @@ class WebdavPlayerPreferences
 
     fun getWebdavRoot(): String? = sharedPreferences.getString(KEY_WEBDAV_ROOT, null)
 
-    fun getDeviceId(): String {
-      val existingDeviceId = sharedPreferences.getString(KEY_DEVICE_ID, null)
-
-      if (existingDeviceId != null) {
-        return existingDeviceId
-      }
-
-      return UUID
-        .randomUUID()
-        .toString()
-        .also { sharedPreferences.edit { putString(KEY_DEVICE_ID, it) } }
-    }
-
     fun getPreferredLibrary(): Library? {
       val id = getPreferredLibraryId() ?: return null
       val name = getPreferredLibraryName() ?: return null
@@ -153,7 +127,9 @@ class WebdavPlayerPreferences
 
         else -> {
           val adapter = moshi.adapter(LibraryOrderingConfiguration::class.java)
-          adapter.fromJson(json) ?: LibraryOrderingConfiguration.default
+          runCatching { adapter.fromJson(json) }
+            .getOrNull()
+            ?: LibraryOrderingConfiguration.default
         }
       }
     }
@@ -164,10 +140,10 @@ class WebdavPlayerPreferences
       }
 
     fun getPlaybackVolumeBoost(): PlaybackVolumeBoost =
-      sharedPreferences
-        .getString(KEY_VOLUME_BOOST, PlaybackVolumeBoost.DISABLED.name)
-        ?.let { PlaybackVolumeBoost.valueOf(it) }
-        ?: PlaybackVolumeBoost.DISABLED
+      enumPreference(
+        key = KEY_VOLUME_BOOST,
+        default = PlaybackVolumeBoost.DISABLED,
+      )
 
     fun saveAutoDownloadNetworkType(networkTypeAutoCache: NetworkTypeAutoCache) =
       sharedPreferences.edit {
@@ -175,10 +151,10 @@ class WebdavPlayerPreferences
       }
 
     fun getAutoDownloadNetworkType(): NetworkTypeAutoCache =
-      sharedPreferences
-        .getString(KEY_PREFERRED_AUTO_DOWNLOAD_NETWORK_TYPE, NetworkTypeAutoCache.WIFI_ONLY.name)
-        ?.let { NetworkTypeAutoCache.valueOf(it) }
-        ?: NetworkTypeAutoCache.WIFI_ONLY
+      enumPreference(
+        key = KEY_PREFERRED_AUTO_DOWNLOAD_NETWORK_TYPE,
+        default = NetworkTypeAutoCache.WIFI_ONLY,
+      )
 
     fun saveColorScheme(colorScheme: ColorScheme) =
       sharedPreferences.edit {
@@ -186,10 +162,10 @@ class WebdavPlayerPreferences
       }
 
     fun getColorScheme(): ColorScheme =
-      sharedPreferences
-        .getString(KEY_PREFERRED_COLOR_SCHEME, ColorScheme.FOLLOW_SYSTEM.name)
-        ?.let { ColorScheme.valueOf(it) }
-        ?: ColorScheme.FOLLOW_SYSTEM
+      enumPreference(
+        key = KEY_PREFERRED_COLOR_SCHEME,
+        default = ColorScheme.FOLLOW_SYSTEM,
+      )
 
     fun saveMaterialYouColors(enabled: Boolean) =
       sharedPreferences.edit {
@@ -218,10 +194,19 @@ class WebdavPlayerPreferences
       }
 
     fun getPreferredSleepTimerStopMode(): DurationTimerStopMode =
+      enumPreference(
+        key = KEY_PREFERRED_SLEEP_TIMER_STOP_MODE,
+        default = DurationTimerStopMode.IMMEDIATE,
+      )
+
+    private inline fun <reified T : Enum<T>> enumPreference(
+      key: String,
+      default: T,
+    ): T =
       sharedPreferences
-        .getString(KEY_PREFERRED_SLEEP_TIMER_STOP_MODE, DurationTimerStopMode.IMMEDIATE.name)
-        ?.let { DurationTimerStopMode.valueOf(it) }
-        ?: DurationTimerStopMode.IMMEDIATE
+        .getString(key, default.name)
+        ?.let { value -> runCatching { enumValueOf<T>(value) }.getOrNull() }
+        ?: default
 
     private fun <T> asFlow(
       key: String,
@@ -257,10 +242,10 @@ class WebdavPlayerPreferences
     private fun saveActiveLibraryName(host: String) = sharedPreferences.edit { putString(KEY_PREFERRED_LIBRARY_NAME, host) }
 
     private fun getPreferredLibraryType(): LibraryType =
-      sharedPreferences
-        .getString(KEY_PREFERRED_LIBRARY_TYPE, null)
-        ?.let { LibraryType.valueOf(it) }
-        ?: LibraryType.LIBRARY
+      enumPreference(
+        key = KEY_PREFERRED_LIBRARY_TYPE,
+        default = LibraryType.LIBRARY,
+      )
 
     private fun saveActiveLibraryType(type: LibraryType) =
       sharedPreferences.edit {
@@ -370,7 +355,9 @@ class WebdavPlayerPreferences
       val type = Types.newParameterizedType(List::class.java, RecentBook::class.java)
       val adapter = moshi.adapter<List<RecentBook>>(type)
 
-      return adapter.fromJson(json) ?: emptyList()
+      return runCatching { adapter.fromJson(json) }
+        .getOrNull()
+        ?: emptyList()
     }
 
     fun savePlaybackSnapshot(snapshot: PlaybackSnapshotRecord) {
@@ -490,8 +477,6 @@ class WebdavPlayerPreferences
 
       private const val KEY_SERVER_VERSION = "server_version"
 
-      private const val KEY_DEVICE_ID = "device_id"
-
       private const val KEY_PREFERRED_LIBRARY_ID = "preferred_library_id"
       private const val KEY_PREFERRED_LIBRARY_NAME = "preferred_library_name"
       private const val KEY_PREFERRED_LIBRARY_TYPE = "preferred_library_type"
@@ -551,19 +536,21 @@ class WebdavPlayerPreferences
       }
 
       private fun decrypt(data: String): String? {
-        val decodedData = Base64.decode(data, Base64.DEFAULT)
-        val iv = decodedData.sliceArray(0 until 12)
-        val cipherText = decodedData.sliceArray(12 until decodedData.size)
+        return runCatching {
+          val decodedData = Base64.decode(data, Base64.DEFAULT)
+          if (decodedData.size <= 12) {
+            return null
+          }
 
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        val spec = GCMParameterSpec(128, iv)
-        cipher.init(Cipher.DECRYPT_MODE, getSecretKey(), spec)
+          val iv = decodedData.sliceArray(0 until 12)
+          val cipherText = decodedData.sliceArray(12 until decodedData.size)
 
-        return try {
+          val cipher = Cipher.getInstance(TRANSFORMATION)
+          val spec = GCMParameterSpec(128, iv)
+          cipher.init(Cipher.DECRYPT_MODE, getSecretKey(), spec)
+
           String(cipher.doFinal(cipherText))
-        } catch (ex: Exception) {
-          null
-        }
+        }.getOrNull()
       }
 
       private val playingItemsType =

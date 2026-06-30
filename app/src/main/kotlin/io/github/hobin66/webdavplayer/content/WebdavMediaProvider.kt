@@ -1,8 +1,6 @@
 package io.github.hobin66.webdavplayer.content
 
 import android.net.Uri
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import io.github.hobin66.webdavplayer.channel.common.ChannelAuthService
 import io.github.hobin66.webdavplayer.channel.common.ChannelProvider
 import io.github.hobin66.webdavplayer.channel.common.MediaChannel
@@ -11,8 +9,8 @@ import io.github.hobin66.webdavplayer.channel.common.OperationResult
 import io.github.hobin66.webdavplayer.channel.common.RefreshableChannel
 import io.github.hobin66.webdavplayer.channel.webdav.WebdavManageBookItem
 import io.github.hobin66.webdavplayer.channel.webdav.WebdavMediaChannel
-import io.github.hobin66.webdavplayer.channel.webdav.WebdavRemotePlaybackProgress
 import io.github.hobin66.webdavplayer.channel.webdav.WebdavRefreshProgress
+import io.github.hobin66.webdavplayer.channel.webdav.WebdavRemotePlaybackProgress
 import io.github.hobin66.webdavplayer.channel.webdav.model.WebdavPlaybackProgress
 import io.github.hobin66.webdavplayer.content.cache.persistent.LocalCacheRepository
 import io.github.hobin66.webdavplayer.content.cache.temporary.CachedBookmarkProvider
@@ -28,12 +26,14 @@ import io.github.hobin66.webdavplayer.lib.domain.RecentBook
 import io.github.hobin66.webdavplayer.lib.domain.UserAccount
 import io.github.hobin66.webdavplayer.lib.domain.isSame
 import io.github.hobin66.webdavplayer.persistence.preferences.WebdavPlayerPreferences
+import io.github.hobin66.webdavplayer.playback.BookSkipSettingsStore
 import io.github.hobin66.webdavplayer.playback.service.PlaybackSnapshotRecord
 import io.github.hobin66.webdavplayer.playback.service.PlaybackSnapshotTrigger
 import io.github.hobin66.webdavplayer.playback.service.calculateChapterIndex
 import io.github.hobin66.webdavplayer.playback.service.canRestoreFromOverallProgress
 import io.github.hobin66.webdavplayer.playback.service.shouldUpdateRecentPlaybackSummary
-import io.github.hobin66.webdavplayer.playback.BookSkipSettingsStore
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import timber.log.Timber
 import java.io.File
 import java.util.LinkedHashMap
@@ -66,6 +66,11 @@ class WebdavMediaProvider
       totalPosition: Double,
     ): Bookmark? {
       val playingItem = preferences.getPlayingItem() ?: return null
+      val currentChapter =
+        playingItem
+          .chapters
+          .getOrNull(calculateChapterIndex(playingItem, totalPosition))
+          ?: return null
 
       return cachedBookmarkProvider
         .createBookmark(
@@ -73,7 +78,7 @@ class WebdavMediaProvider
           chapterTime = chapterPosition,
           libraryItemId = libraryItemId,
           totalTime = totalPosition,
-          currentChapter = playingItem.chapters[calculateChapterIndex(playingItem, totalPosition)].title,
+          currentChapter = currentChapter.title,
         )
     }
 
@@ -734,18 +739,19 @@ class WebdavMediaProvider
         remoteFileUriCache[cacheKey]?.let { return OperationResult.Success(it) }
       }
 
-      val result =
+      val uri =
         providePreferredChannel()
           .provideFileUri(libraryItemId, chapterId)
-          .let { OperationResult.Success(it) }
 
-      if (result.data != Uri.EMPTY) {
-        synchronized(remoteFileUriCache) {
-          remoteFileUriCache[cacheKey] = result.data
-        }
+      if (uri == Uri.EMPTY || uri.scheme.isNullOrBlank()) {
+        return OperationResult.Error(OperationError.NotFoundError)
       }
 
-      return result
+      synchronized(remoteFileUriCache) {
+        remoteFileUriCache[cacheKey] = uri
+      }
+
+      return OperationResult.Success(uri)
     }
 
     private fun remoteFileUriCacheKey(
