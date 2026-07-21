@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -221,10 +222,21 @@ fun PlayerScreen(
                   enabled = !bookRefreshInProgress,
                   modifier = Modifier.padding(end = 4.dp),
                 ) {
-                  Icon(
-                    imageVector = Icons.Outlined.Refresh,
-                    contentDescription = stringResource(R.string.player_current_book_action_title),
-                  )
+                  when (bookRefreshInProgress) {
+                    true -> {
+                      CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        strokeWidth = 2.dp,
+                      )
+                    }
+
+                    false -> {
+                      Icon(
+                        imageVector = Icons.Outlined.Refresh,
+                        contentDescription = stringResource(R.string.player_current_book_action_title),
+                      )
+                    }
+                  }
                 }
               }
 

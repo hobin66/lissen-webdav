@@ -196,6 +196,7 @@
     <string name="player_sync_current_book_remote_to_local_description">云端进度覆盖本机</string>
     <string name="player_sync_current_book_local_to_remote_confirm_message">只同步进度：本机 -&gt; 云端。</string>
     <string name="player_sync_current_book_remote_to_local_confirm_message">只同步进度：云端 -&gt; 本机。</string>
+    <string name="player_sync_current_book_success">同步进度完成</string>
     <string name="player_sync_current_book_failed">同步进度失败</string>
     <string name="player_refresh_current_book_cache_title">刷新缓存</string>
     <string name="player_refresh_current_book_cache_description">刷新缓存和音源</string>
