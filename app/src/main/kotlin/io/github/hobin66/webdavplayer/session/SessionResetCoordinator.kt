@@ -6,6 +6,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import io.github.hobin66.webdavplayer.content.WebdavMediaProvider
 import io.github.hobin66.webdavplayer.persistence.preferences.WebdavPlayerPreferences
 import io.github.hobin66.webdavplayer.playback.MediaRepository
+import io.github.hobin66.webdavplayer.playback.cache.PlaybackStreamCache
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -17,11 +18,13 @@ class SessionResetCoordinator
     private val mediaRepository: MediaRepository,
     private val mediaProvider: WebdavMediaProvider,
     private val preferences: WebdavPlayerPreferences,
+    private val streamCache: PlaybackStreamCache,
   ) {
     suspend fun logout() {
       val actions = buildLogoutSessionResetActions()
 
       if (actions.shouldClearPlayingState) {
+        mediaRepository.cancelChapterDurationWorkAndJoin()
         mediaRepository.clearPlayingBook()
       }
       if (actions.shouldStopPlaybackService) {
@@ -31,6 +34,7 @@ class SessionResetCoordinator
         stopCachingService()
       }
       mediaProvider.clearSessionState()
+      streamCache.clearForLogout()
       preferences.clearPreferences()
     }
 

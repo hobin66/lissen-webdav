@@ -18,6 +18,7 @@ import dagger.hilt.components.SingletonComponent
 import io.github.hobin66.webdavplayer.R
 import io.github.hobin66.webdavplayer.content.WebdavMediaProvider
 import io.github.hobin66.webdavplayer.persistence.preferences.WebdavPlayerPreferences
+import io.github.hobin66.webdavplayer.playback.cache.PlaybackStreamCache
 import io.github.hobin66.webdavplayer.playback.service.WebdavPlayerDataSourceFactory
 import io.github.hobin66.webdavplayer.playback.service.WebdavPlayerMediaSourceFactory
 import timber.log.Timber
@@ -34,6 +35,7 @@ object MediaModule {
     @ApplicationContext context: Context,
     sharedPreferences: WebdavPlayerPreferences,
     mediaProvider: WebdavMediaProvider,
+    streamCache: PlaybackStreamCache,
   ): ExoPlayer {
     val mediaCodecQueueingMode = sharedPreferences.getMediaCodecQueueingMode()
     val renderersFactory =
@@ -61,6 +63,7 @@ object MediaModule {
         .setAudioAttributes(providePlaybackAudioAttributes(), true)
         .setWakeMode(PowerManager.PARTIAL_WAKE_LOCK)
         .experimentalSetDynamicSchedulingEnabled(true)
+        .setLoadControl(providePlaybackLoadControl())
         .setRenderersFactory(renderersFactory)
         .setMediaSourceFactory(
           WebdavPlayerMediaSourceFactory(
@@ -70,6 +73,7 @@ object MediaModule {
                   baseContext = context,
                   sharedPreferences = sharedPreferences,
                   mediaProvider = mediaProvider,
+                  streamCache = streamCache,
                 ),
               ),
           ),

@@ -92,12 +92,13 @@ class WebdavMediaChannel
           resolvedCoverName = entry.resolvedCoverName,
         )
 
+      val errors = mutableListOf<OperationError>()
       var lastError: OperationResult.Error<*>? = null
 
       uniqueCandidates.forEach { coverName ->
         val candidatePath = "${entry.directory.relativePath}/$coverName"
 
-        when (val result = webdavClient.fetchBinary(relativePath = candidatePath)) {
+        when (val result = webdavClient.fetchBinary(relativePath = candidatePath, maxBytes = WEBDAV_COVER_MAX_BYTES)) {
           is OperationResult.Success -> {
             if (entry.resolvedCoverName != coverName || entry.isCoverMissing) {
               updateIndexedBook(bookId) { markResolvedWebdavCover(it, coverName) }
@@ -106,6 +107,7 @@ class WebdavMediaChannel
           }
 
           is OperationResult.Error -> {
+            errors += result.code
             if (result.code != OperationError.NotFoundError) {
               lastError = result
             }
@@ -113,8 +115,11 @@ class WebdavMediaChannel
         }
       }
 
-      updateIndexedBook(bookId, ::markMissingWebdavCover)
-      return lastError?.let { OperationResult.Error(it.code) } ?: OperationResult.Error(OperationError.NotFoundError)
+      if (shouldMarkWebdavCoverMissing(errors)) {
+        updateIndexedBook(bookId, ::markMissingWebdavCover)
+      }
+      return lastError?.let { OperationResult.Error(it.code, it.message) }
+        ?: OperationResult.Error(OperationError.NotFoundError)
     }
 
     override suspend fun fetchBooks(
@@ -494,15 +499,29 @@ class WebdavMediaChannel
                         ensureBookMetadata(directory = directory, previous = persisted)
                           ?: return@withPermit null
 
+                      val preferredCoverName = metadataResolution.metadata.coverOrDefault()
+
                       val coverValidation =
                         resolveCoverValidation(
                           directory = directory,
-                          coverName = metadataResolution.metadata.coverOrDefault(),
+                          coverName = preferredCoverName,
                           previous = persisted,
                           force = true,
                           bookId = metadataResolution.metadata.id,
-                          dropLocalCoverOnChange = false,
                         )
+
+                      val (resolvedCoverName, isCoverMissing) =
+                        resolveCoverIdentityAfterValidation(
+                          previous = persisted,
+                          preferredCoverName = preferredCoverName,
+                          validatedCoverName = coverValidation.resolvedCoverName,
+                          coverMissing = coverValidation.isMissing,
+                          preservePreviousIdentity = coverValidation.preservePreviousIdentity,
+                        )
+
+                      val directoryChanged =
+                        persisted == null ||
+                          isDirectoryValidationChanged(persisted, directory)
 
                       val book =
                         IndexedBook(
@@ -513,8 +532,8 @@ class WebdavMediaChannel
                           metadataPath = metadataResolution.metadataPath,
                           coverEtag = coverValidation.eTag,
                           coverLastModified = coverValidation.lastModified,
-                          resolvedCoverName = null,
-                          isCoverMissing = false,
+                          resolvedCoverName = resolvedCoverName,
+                          isCoverMissing = isCoverMissing,
                           isAdded = persisted?.isAdded ?: true,
                         )
 
@@ -523,7 +542,7 @@ class WebdavMediaChannel
                         onProgress(progress)
                       }
 
-                      book
+                      RebuildEntry(book = book, directoryChanged = directoryChanged)
                     }
                   }
                 }.awaitAll()
@@ -534,11 +553,12 @@ class WebdavMediaChannel
             return@foldAsync OperationResult.Error(OperationError.InternalError)
           }
 
-          val mapped = refreshed.associateBy { it.metadata.id }
+          // Explicit refresh must not trust collection validators for child audio files.
+          persistentCache.clearBookDetails()
+
+          val mapped = refreshed.associate { it.book.metadata.id to it.book }
 
           cachedBooks = mapped
-          clearCachedCoverFiles()
-          persistentCache.clearBookDetails()
           persistentCache.saveBookIndex(mapped.values.map { it.toIndexEntry() })
           OperationResult.Success(Unit)
         },
@@ -573,6 +593,25 @@ class WebdavMediaChannel
               previous = current.toIndexEntry(),
             ) ?: return@foldAsync OperationResult.Error(OperationError.InternalError)
 
+          val preferredCoverName = metadataResolution.metadata.coverOrDefault()
+          val previous = current.toIndexEntry()
+          val coverValidation =
+            resolveCoverValidation(
+              directory = directory,
+              coverName = preferredCoverName,
+              previous = previous,
+              force = true,
+              bookId = metadataResolution.metadata.id,
+            )
+          val (resolvedCoverName, isCoverMissing) =
+            resolveCoverIdentityAfterValidation(
+              previous = previous,
+              preferredCoverName = preferredCoverName,
+              validatedCoverName = coverValidation.resolvedCoverName,
+              coverMissing = coverValidation.isMissing,
+              preservePreviousIdentity = coverValidation.preservePreviousIdentity,
+            )
+
           putIndexedBook(
             current.copy(
               metadata = metadataResolution.metadata,
@@ -580,15 +619,14 @@ class WebdavMediaChannel
               metadataEtag = metadataResolution.eTag,
               metadataLastModified = metadataResolution.lastModified,
               metadataPath = metadataResolution.metadataPath,
-              coverEtag = null,
-              coverLastModified = null,
-              resolvedCoverName = null,
-              isCoverMissing = false,
+              coverEtag = coverValidation.eTag,
+              coverLastModified = coverValidation.lastModified,
+              resolvedCoverName = resolvedCoverName,
+              isCoverMissing = isCoverMissing,
               isAdded = current.isAdded,
             ),
           )
           persistentCache.removeBookDetail(itemId)
-          dropLocalCover(itemId)
 
           OperationResult.Success(Unit)
         },
@@ -747,16 +785,35 @@ class WebdavMediaChannel
                       val persisted = persistedByDirectory[directory.relativePath]
                       val metadataResolution = ensureBookMetadata(directory, persisted) ?: return@withPermit null
 
+                      val forceCover =
+                        force ||
+                          shouldForceWebdavCoverValidation(
+                            previous = persisted,
+                            preferredCoverName = metadataResolution.metadata.coverOrDefault(),
+                            directoryEtag = directory.eTag,
+                            directoryLastModified = directory.lastModified,
+                          )
+
                       val coverValidation =
                         resolveCoverValidation(
                           directory = directory,
                           coverName = metadataResolution.metadata.coverOrDefault(),
                           previous = persisted,
-                          force = force,
+                          force = forceCover,
                           bookId = metadataResolution.metadata.id,
                         )
 
-                      val directoryChanged = isDirectoryValidationChanged(persisted, directory)
+                      val directoryChanged =
+                        persisted == null || isDirectoryValidationChanged(persisted, directory)
+
+                      val (resolvedCoverName, isCoverMissing) =
+                        resolveCoverIdentityAfterValidation(
+                          previous = persisted,
+                          preferredCoverName = metadataResolution.metadata.coverOrDefault(),
+                          validatedCoverName = coverValidation.resolvedCoverName,
+                          coverMissing = coverValidation.isMissing,
+                          preservePreviousIdentity = coverValidation.preservePreviousIdentity,
+                        )
 
                       val indexedBook =
                         IndexedBook(
@@ -767,8 +824,8 @@ class WebdavMediaChannel
                           metadataPath = metadataResolution.metadataPath,
                           coverEtag = coverValidation.eTag,
                           coverLastModified = coverValidation.lastModified,
-                          resolvedCoverName = if (force) null else persisted?.resolvedCoverName,
-                          isCoverMissing = if (force) false else persisted?.isCoverMissing ?: false,
+                          resolvedCoverName = resolvedCoverName,
+                          isCoverMissing = isCoverMissing,
                           isAdded = persisted?.isAdded ?: true,
                         )
 
@@ -779,9 +836,13 @@ class WebdavMediaChannel
                 .filterNotNull()
             }
 
-          entries
-            .filter { it.directoryChanged }
-            .forEach { persistentCache.removeBookDetail(it.book.metadata.id) }
+          if (force) {
+            persistentCache.clearBookDetails()
+          } else {
+            entries
+              .filter { it.directoryChanged }
+              .forEach { persistentCache.removeBookDetail(it.book.metadata.id) }
+          }
 
           val mapped = entries.associate { it.book.metadata.id to it.book }
 
@@ -918,16 +979,32 @@ class WebdavMediaChannel
       previous: WebdavBookIndexEntry?,
       force: Boolean,
       bookId: String,
-      dropLocalCoverOnChange: Boolean = true,
     ): CoverValidation {
       if (!force) {
         return CoverValidation(
           eTag = previous?.coverEtag,
           lastModified = previous?.coverLastModified,
+          resolvedCoverName = previous?.resolvedCoverName,
+          preservePreviousIdentity = true,
+          // Preserve prior missing flag; only full candidate failure should set it true.
+          isMissing = previous?.isCoverMissing ?: false,
         )
       }
 
-      val coverPath = "${directory.relativePath}/$coverName"
+      val preferredChanged = previous?.coverName != coverName
+      val validationName =
+        previous
+          ?.resolvedCoverName
+          ?.takeUnless { preferredChanged }
+          ?: coverName
+      val coverPath = "${directory.relativePath}/$validationName"
+      val previousValidatedSameFile =
+        previous?.let { entry ->
+          entry.resolvedCoverName == validationName ||
+            (entry.resolvedCoverName == null && entry.coverName == validationName)
+        } ?: false
+      val previousEtag = previous?.coverEtag
+      val previousLastModified = previous?.coverLastModified
 
       return webdavClient
         .head(coverPath)
@@ -936,32 +1013,58 @@ class WebdavMediaChannel
             val newEtag = findHeaderIgnoreCase(headers, "ETag")
             val newLastModified = findHeaderIgnoreCase(headers, "Last-Modified")
 
-            if (
-              dropLocalCoverOnChange &&
-              isValidationChanged(previous?.coverEtag, previous?.coverLastModified, newEtag, newLastModified)
-            ) {
+            val validationChanged =
+              !previousValidatedSameFile ||
+                isValidationChanged(previousEtag, previousLastModified, newEtag, newLastModified)
+            val validatorsUnavailable = newEtag.isNullOrBlank() && newLastModified.isNullOrBlank()
+            if (validationChanged || validatorsUnavailable) {
               dropLocalCover(bookId)
             }
 
             CoverValidation(
               eTag = newEtag,
               lastModified = newLastModified,
+              resolvedCoverName = validationName,
+              preservePreviousIdentity = false,
+              isMissing = false,
             )
           },
           onFailure = {
             when (it.code) {
               OperationError.NotFoundError -> {
-                if (dropLocalCoverOnChange) {
+                // One missing candidate is not proof that fallback candidates are absent.
+                if (previousValidatedSameFile || preferredChanged) {
                   dropLocalCover(bookId)
                 }
-                CoverValidation(null, null)
+                CoverValidation(
+                  eTag = null,
+                  lastModified = null,
+                  resolvedCoverName = null,
+                  preservePreviousIdentity = false,
+                  isMissing = false,
+                )
               }
 
               else -> {
-                CoverValidation(
-                  eTag = previous?.coverEtag,
-                  lastModified = previous?.coverLastModified,
-                )
+                dropLocalCover(bookId)
+                if (preferredChanged) {
+                  CoverValidation(
+                    eTag = null,
+                    lastModified = null,
+                    resolvedCoverName = null,
+                    preservePreviousIdentity = false,
+                    isMissing = false,
+                  )
+                } else {
+                  val previousEntry = requireNotNull(previous)
+                  CoverValidation(
+                    eTag = previousEntry.coverEtag,
+                    lastModified = previousEntry.coverLastModified,
+                    resolvedCoverName = previousEntry.resolvedCoverName,
+                    preservePreviousIdentity = true,
+                    isMissing = previousEntry.isCoverMissing,
+                  )
+                }
               }
             }
           },
@@ -981,13 +1084,13 @@ class WebdavMediaChannel
         val chapterId = WebdavPathCodec.encode(resource.relativePath)
         val displayName = buildTrackDisplayTitle(resource.name)
         val chapterTitle = displayName
-        val timelineDuration = unresolvedTimelineDurationSeconds
+        val timelineDuration = UNRESOLVED_TIMELINE_DURATION_SECONDS
 
         files.add(
           BookFile(
             id = chapterId,
             name = displayName,
-            duration = unresolvedDisplayDurationSeconds,
+            duration = UNRESOLVED_DISPLAY_DURATION_SECONDS,
             mimeType = resource.mimeType ?: guessMimeType(resource.name),
             size = resource.size,
           ),
@@ -996,7 +1099,7 @@ class WebdavMediaChannel
         chapters.add(
           PlayingChapter(
             available = true,
-            duration = unresolvedDisplayDurationSeconds,
+            duration = UNRESOLVED_DISPLAY_DURATION_SECONDS,
             start = chapterStart,
             end = chapterStart + timelineDuration,
             title = chapterTitle,
@@ -1416,6 +1519,9 @@ class WebdavMediaChannel
     data class CoverValidation(
       val eTag: String?,
       val lastModified: String?,
+      val resolvedCoverName: String?,
+      val preservePreviousIdentity: Boolean,
+      val isMissing: Boolean = false,
     )
 
     private data class RebuildEntry(
@@ -1442,8 +1548,6 @@ class WebdavMediaChannel
       private const val REFRESH_PARALLELISM = 6
 
       private val chunkRegex = Regex("""\d+|\D+""")
-      private const val unresolvedDisplayDurationSeconds = 0.0
-      private const val unresolvedTimelineDurationSeconds = 1.0
 
       internal fun metadataFilePathCandidates(directoryRelativePath: String): List<String> =
         listOf(BOOK_METADATA_FILE_NAME, LEGACY_BOOK_METADATA_FILE_NAME)

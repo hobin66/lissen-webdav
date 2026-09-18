@@ -80,6 +80,30 @@ class WebdavPersistentCache
       }
     }
 
+    suspend fun updateBookDetail(
+      bookId: String,
+      transform: (WebdavBookDetailCache) -> WebdavBookDetailCache,
+    ): WebdavBookDetailCache? =
+      withContext(Dispatchers.IO) {
+        detailsMutex.withLock {
+          val file = provideDetailFile(bookId)
+          val json = runCatching { file.takeIf(File::exists)?.readText() }.getOrNull() ?: return@withLock null
+          val existing =
+            runCatching { detailCacheAdapter.fromJson(json) }
+              .onFailure { Timber.w(it, "Unable to parse detail cache for $bookId") }
+              .getOrNull()
+              ?: return@withLock null
+          val updated = transform(existing)
+
+          runCatching {
+            detailsFolder.mkdirs()
+            file.writeText(detailCacheAdapter.toJson(updated))
+            updated
+          }.onFailure { Timber.w(it, "Unable to update detail cache for $bookId") }
+            .getOrNull()
+        }
+      }
+
     suspend fun removeBookDetail(bookId: String) {
       withContext(Dispatchers.IO) {
         detailsMutex.withLock {

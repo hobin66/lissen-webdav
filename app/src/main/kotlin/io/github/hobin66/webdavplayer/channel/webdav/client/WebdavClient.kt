@@ -407,7 +407,10 @@ class WebdavClient
         )
       }
 
-    suspend fun fetchBinary(relativePath: String): OperationResult<Buffer> =
+    suspend fun fetchBinary(
+      relativePath: String,
+      maxBytes: Long? = null,
+    ): OperationResult<Buffer> =
       withContext(Dispatchers.IO) {
         val safeHost = preferences.getHost() ?: return@withContext OperationResult.Error(OperationError.MissingCredentialsHost)
         val rootPath = preferences.getWebdavRoot() ?: "/"
@@ -430,7 +433,43 @@ class WebdavClient
                 return@foldAsync OperationResult.Error(mapResponseCode(it.code))
               }
 
-              OperationResult.Success(Buffer().apply { writeAll(it.body.source()) })
+              val body = it.body
+              val contentLength = body.contentLength()
+              if (maxBytes != null && contentLength >= 0 && contentLength > maxBytes) {
+                Timber.w(
+                  "Skipping oversized binary %s contentLength=%d maxBytes=%d",
+                  relativePath,
+                  contentLength,
+                  maxBytes,
+                )
+                return@foldAsync OperationResult.Error(OperationError.InternalError)
+              }
+
+              val buffer = Buffer()
+              val source = body.source()
+              if (maxBytes == null) {
+                buffer.writeAll(source)
+              } else {
+                var total = 0L
+                while (!source.exhausted()) {
+                  val read = source.read(buffer, 8_192L)
+                  if (read == -1L) {
+                    break
+                  }
+                  total += read
+                  if (total > maxBytes) {
+                    Timber.w(
+                      "Aborting oversized binary %s downloaded=%d maxBytes=%d",
+                      relativePath,
+                      total,
+                      maxBytes,
+                    )
+                    return@foldAsync OperationResult.Error(OperationError.InternalError)
+                  }
+                }
+              }
+
+              OperationResult.Success(buffer)
             }
           },
           onFailure = { OperationResult.Error(it.code) },
@@ -485,7 +524,13 @@ class WebdavClient
       }.fold(
         onSuccess = { OperationResult.Success(it) },
         onFailure = {
-          Timber.e(it, "WebDAV request failed: ${request.method} ${request.url}")
+          Timber.e(
+            it,
+            "WebDAV request failed: method=%s scheme=%s host=%s",
+            request.method,
+            request.url.scheme,
+            request.url.host,
+          )
           OperationResult.Error(OperationError.NetworkError)
         },
       )

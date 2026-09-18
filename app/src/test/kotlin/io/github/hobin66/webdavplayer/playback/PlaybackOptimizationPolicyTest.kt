@@ -1,6 +1,8 @@
 package io.github.hobin66.webdavplayer.playback
 
+import androidx.annotation.OptIn
 import androidx.media3.common.C
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
 import io.github.hobin66.webdavplayer.common.PlaybackVolumeBoost
@@ -155,5 +157,17 @@ class PlaybackOptimizationPolicyTest {
       listOf("c2.qti.aac.hw.decoder", "c2.android.aac.decoder"),
       ordered.map { it.name },
     )
+  }
+
+  @Test
+  @OptIn(UnstableApi::class)
+  fun `playback load control favors larger buffers for high-latency WebDAV`() {
+    // Touching the builder ensures the Media3 wiring stays compatible.
+    providePlaybackLoadControl()
+
+    assertEquals(30_000, PLAYBACK_MIN_BUFFER_MS)
+    assertEquals(120_000, PLAYBACK_MAX_BUFFER_MS)
+    assertEquals(2_500, PLAYBACK_BUFFER_FOR_PLAYBACK_MS)
+    assertEquals(5_000, PLAYBACK_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS)
   }
 }

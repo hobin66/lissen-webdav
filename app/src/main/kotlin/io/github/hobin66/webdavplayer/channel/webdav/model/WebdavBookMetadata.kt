@@ -55,6 +55,7 @@ data class WebdavPlaybackProgress(
       chapterPosition = safeChapterTime,
       totalPosition = currentTime,
       lastUpdated = lastUpdate,
+      isTotalPositionReliable = true,
     )
   }
 
@@ -65,13 +66,20 @@ data class WebdavPlaybackProgress(
     ): WebdavPlaybackProgress? {
       val mediaLastUpdate = mediaProgress?.lastUpdate ?: 0L
       val snapshotLastUpdate = snapshot?.lastUpdated ?: 0L
-      val useSnapshot = snapshot != null && snapshotLastUpdate >= mediaLastUpdate
+      val useSnapshot =
+        snapshot != null &&
+          snapshot.isTotalPositionReliable &&
+          snapshotLastUpdate >= mediaLastUpdate
       val currentTime =
         when {
           useSnapshot -> snapshot.totalPosition
           else -> mediaProgress?.currentTime
         } ?: return null
-      val lastUpdate = maxOf(mediaLastUpdate, snapshotLastUpdate).takeIf { it > 0L } ?: return null
+      val lastUpdate =
+        when {
+          useSnapshot -> snapshotLastUpdate
+          else -> mediaLastUpdate
+        }.takeIf { it > 0L } ?: return null
 
       return WebdavPlaybackProgress(
         currentTime = currentTime,

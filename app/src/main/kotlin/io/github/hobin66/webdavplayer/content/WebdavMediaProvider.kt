@@ -27,6 +27,7 @@ import io.github.hobin66.webdavplayer.lib.domain.UserAccount
 import io.github.hobin66.webdavplayer.lib.domain.isSame
 import io.github.hobin66.webdavplayer.persistence.preferences.WebdavPlayerPreferences
 import io.github.hobin66.webdavplayer.playback.BookSkipSettingsStore
+import io.github.hobin66.webdavplayer.playback.cache.PlaybackStreamCache
 import io.github.hobin66.webdavplayer.playback.service.PlaybackSnapshotRecord
 import io.github.hobin66.webdavplayer.playback.service.PlaybackSnapshotTrigger
 import io.github.hobin66.webdavplayer.playback.service.calculateChapterIndex
@@ -49,6 +50,7 @@ class WebdavMediaProvider
     private val localCacheRepository: LocalCacheRepository,
     private val cachedCoverProvider: CachedCoverProvider,
     private val cachedBookmarkProvider: CachedBookmarkProvider,
+    private val playbackStreamCache: PlaybackStreamCache,
   ) {
     private val _remoteRefreshVersion = MutableStateFlow(0L)
     val remoteRefreshVersion = _remoteRefreshVersion.asStateFlow()
@@ -132,14 +134,14 @@ class WebdavMediaProvider
         progress = progress,
       )
 
-      if (shouldUpdateRecentPlaybackSummary(trigger)) {
+      if (progress.isTotalPositionReliable && shouldUpdateRecentPlaybackSummary(trigger)) {
         updateRecentPlaybackSummary(
           detailedItem = detailedItem,
           progress = progress,
         )
       }
 
-      if (detailedItem.canRestoreFromOverallProgress()) {
+      if (progress.isTotalPositionReliable && detailedItem.canRestoreFromOverallProgress()) {
         localCacheRepository.syncProgress(detailedItem, progress)
       }
     }
@@ -239,6 +241,7 @@ class WebdavMediaProvider
     ): OperationResult<DetailedItem> {
       Timber.d("Fetching Detailed book info for $bookId")
 
+      // Duration probing is scheduled by playback after prepare so opening a large book is not blocked.
       return when (preferences.isForceCache()) {
         true -> {
           localCacheRepository
@@ -395,13 +398,22 @@ class WebdavMediaProvider
       chapterId: String,
       progress: PlaybackProgress,
     ) {
+      val reliableTotalPosition =
+        progress.currentTotalTime.takeIf { progress.isTotalPositionReliable }
+          ?: preferences
+            .getPlaybackSnapshot(detailedItem.id)
+            ?.totalPosition
+          ?: detailedItem.progress?.currentTime
+          ?: 0.0
+
       preferences.savePlaybackSnapshot(
         PlaybackSnapshotRecord(
           bookId = detailedItem.id,
           chapterId = chapterId,
           chapterPosition = progress.currentChapterTime,
-          totalPosition = progress.currentTotalTime,
+          totalPosition = reliableTotalPosition,
           lastUpdated = System.currentTimeMillis(),
+          isTotalPositionReliable = progress.isTotalPositionReliable,
         ),
       )
     }
@@ -455,6 +467,7 @@ class WebdavMediaProvider
         }
 
       if (result is OperationResult.Success) {
+        playbackStreamCache.invalidateAndClear()
         _remoteRefreshVersion.value = System.currentTimeMillis()
       }
 
@@ -523,10 +536,14 @@ class WebdavMediaProvider
 
     suspend fun refreshItemCache(itemId: String): OperationResult<Unit> {
       val channel = providePreferredChannel()
-      return when (channel is RefreshableChannel) {
+      val result = when (channel is RefreshableChannel) {
         true -> channel.refreshItemCache(itemId)
         false -> OperationResult.Error(OperationError.UnsupportedError)
       }
+      if (result is OperationResult.Success) {
+        playbackStreamCache.invalidateAndClear()
+      }
+      return result
     }
 
     suspend fun fetchManageBooks(forceRefresh: Boolean): OperationResult<List<WebdavManageBookItem>> {

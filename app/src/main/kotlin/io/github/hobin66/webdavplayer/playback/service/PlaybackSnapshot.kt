@@ -11,6 +11,7 @@ data class PlaybackSnapshotRecord(
   val chapterPosition: Double,
   val totalPosition: Double,
   val lastUpdated: Long,
+  val isTotalPositionReliable: Boolean = true,
 )
 
 data class PlaybackSnapshotStart(
@@ -58,8 +59,7 @@ fun DetailedItem.isDirectFileQueue(): Boolean =
 fun DetailedItem.canRestoreFromOverallProgress(): Boolean =
   when {
     isDirectFileQueue().not() -> true
-    chapters.any { it.duration > 0.0 } -> true
-    else -> false
+    else -> chapters.isNotEmpty() && chapters.all { it.duration > 0.0 }
   }
 
 fun resolvePlaybackStartPosition(

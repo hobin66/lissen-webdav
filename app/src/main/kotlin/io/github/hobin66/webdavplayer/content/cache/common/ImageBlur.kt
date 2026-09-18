@@ -14,12 +14,20 @@ import okio.BufferedSource
 
 fun Buffer.withBlur(context: Context): Buffer {
   val dimensions: Pair<Int, Int>? = getImageDimensions(this)
+  val canDecodeForBlur =
+    dimensions != null &&
+      dimensions.first > 0 &&
+      dimensions.second > 0 &&
+      maxOf(dimensions.first, dimensions.second) <= MAX_BLUR_SOURCE_DIMENSION
 
-  return when (dimensions?.first == dimensions?.second) {
-    true -> this
-    false -> runCatching { sourceWithBackdropBlur(this, context) }.getOrElse { this }
+  return when {
+    dimensions?.first == dimensions?.second -> this
+    !canDecodeForBlur -> this
+    else -> runCatching { sourceWithBackdropBlur(this, context) }.getOrElse { this }
   }
 }
+
+private const val MAX_BLUR_SOURCE_DIMENSION = 2_048
 
 private fun sourceWithBackdropBlur(
   source: BufferedSource,

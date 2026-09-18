@@ -213,6 +213,33 @@ class WebdavBookMetadataTest {
   }
 
   @Test
+  fun `unreliable newer snapshot does not make older total progress look new`() {
+    val progress =
+      WebdavPlaybackProgress.from(
+        mediaProgress =
+          MediaProgress(
+            currentTime = 75.0,
+            isFinished = false,
+            lastUpdate = 100L,
+          ),
+        snapshot =
+          PlaybackSnapshotRecord(
+            bookId = "book-id",
+            chapterId = "chapter-2",
+            chapterPosition = 12.0,
+            totalPosition = 42.0,
+            lastUpdated = 200L,
+            isTotalPositionReliable = false,
+          ),
+      )
+
+    requireNotNull(progress)
+    assertEquals(75.0, progress.currentTime)
+    assertEquals(100L, progress.lastUpdate)
+    assertNull(progress.chapterId)
+  }
+
+  @Test
   fun `converts playback progress to snapshot when chapter is present`() {
     val snapshot =
       WebdavPlaybackProgress(

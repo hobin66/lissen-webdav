@@ -4,6 +4,7 @@ import com.squareup.moshi.Types
 import io.github.hobin66.webdavplayer.common.moshi
 import io.github.hobin66.webdavplayer.lib.domain.RecentBook
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class PlaybackSnapshotJsonTest {
@@ -36,6 +37,18 @@ class PlaybackSnapshotJsonTest {
 
     assertEquals("chapter-372", restored?.get("book")?.chapterId)
     assertEquals(12.34, restored?.get("book")?.chapterPosition)
+  }
+
+  @Test
+  fun `old playback snapshot json defaults total position to reliable`() {
+    val adapter = moshi.adapter(PlaybackSnapshotRecord::class.java)
+
+    val restored =
+      adapter.fromJson(
+        """{"bookId":"book","chapterId":"chapter","chapterPosition":1.0,"totalPosition":2.0,"lastUpdated":3}""",
+      )
+
+    assertTrue(requireNotNull(restored).isTotalPositionReliable)
   }
 
   @Test

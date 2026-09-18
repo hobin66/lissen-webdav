@@ -5,7 +5,9 @@ import io.github.hobin66.webdavplayer.lib.domain.DetailedItem
 import io.github.hobin66.webdavplayer.lib.domain.MediaProgress
 import io.github.hobin66.webdavplayer.lib.domain.PlayingChapter
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class PlaybackSnapshotRestoreTest {
@@ -80,6 +82,40 @@ class PlaybackSnapshotRestoreTest {
       )
 
     assertNull(restored)
+  }
+
+  @Test
+  fun `partial direct queue durations cannot restore from total progress`() {
+    val item =
+      directQueueBook(progress = 42.0).let { book ->
+        book.copy(
+          files = book.files.mapIndexed { index, file -> file.copy(duration = if (index == 0) 60.0 else 0.0) },
+          chapters = book.chapters.mapIndexed { index, chapter -> chapter.copy(duration = if (index == 0) 60.0 else 0.0) },
+        )
+      }
+
+    assertFalse(item.canRestoreFromOverallProgress())
+    assertEquals(0, resolvePlaybackStartPosition(item).index)
+  }
+
+  @Test
+  fun `fully resolved direct queue can restore from total progress`() {
+    val item =
+      directQueueBook(progress = 75.0).let { book ->
+        var start = 0.0
+        val chapters =
+          book.chapters.take(3).map { chapter ->
+            chapter.copy(duration = 60.0, start = start, end = (start + 60.0).also { start = it })
+          }
+        book.copy(
+          files = book.files.take(3).map { it.copy(duration = 60.0) },
+          chapters = chapters,
+        )
+      }
+
+    assertTrue(item.canRestoreFromOverallProgress())
+    assertEquals(1, resolvePlaybackStartPosition(item).index)
+    assertEquals(15.0, resolvePlaybackStartPosition(item).position)
   }
 
   private fun chapter(id: String) =

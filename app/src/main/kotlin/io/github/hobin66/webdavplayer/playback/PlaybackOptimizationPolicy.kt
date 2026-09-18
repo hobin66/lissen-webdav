@@ -5,11 +5,25 @@ import androidx.media3.common.C
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
 import io.github.hobin66.webdavplayer.common.PlaybackVolumeBoost
 
 private const val PLAYBACK_PROGRESS_UPDATE_INTERVAL_MS = 1_000L
 private const val POSITION_REFRESH_EPSILON_SECONDS = 0.05
+
+/** Minimum buffer kept while streaming over high-latency WebDAV links. */
+const val PLAYBACK_MIN_BUFFER_MS = 30_000
+
+/** Upper bound for pre-buffered media to limit memory/disk pressure. */
+const val PLAYBACK_MAX_BUFFER_MS = 120_000
+
+/** How much must be buffered before the first start. */
+const val PLAYBACK_BUFFER_FOR_PLAYBACK_MS = 2_500
+
+/** How much must be buffered after a rebuffer/seek under load. */
+const val PLAYBACK_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 5_000
 
 fun providePlaybackAudioAttributes(): AudioAttributes =
   AudioAttributes
@@ -34,6 +48,18 @@ fun resolveAudioOffloadMode(volumeBoost: PlaybackVolumeBoost): Int =
     PlaybackVolumeBoost.DISABLED -> TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED
     else -> TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED
   }
+
+@UnstableApi
+fun providePlaybackLoadControl(): LoadControl =
+  DefaultLoadControl
+    .Builder()
+    .setBufferDurationsMs(
+      PLAYBACK_MIN_BUFFER_MS,
+      PLAYBACK_MAX_BUFFER_MS,
+      PLAYBACK_BUFFER_FOR_PLAYBACK_MS,
+      PLAYBACK_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+    ).setPrioritizeTimeOverSizeThresholds(true)
+    .build()
 
 fun resolvePlaybackProgressUpdateIntervalMs(isPlaying: Boolean): Long? =
   when (isPlaying) {

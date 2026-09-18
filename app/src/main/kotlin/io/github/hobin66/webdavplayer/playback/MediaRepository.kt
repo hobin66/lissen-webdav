@@ -10,6 +10,7 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MediatorLiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.media3.common.C
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
@@ -22,6 +23,11 @@ import io.github.hobin66.webdavplayer.R
 import io.github.hobin66.webdavplayer.channel.common.OperationError
 import io.github.hobin66.webdavplayer.channel.common.OperationResult
 import io.github.hobin66.webdavplayer.content.PlaybackProgressSyncDirection
+import io.github.hobin66.webdavplayer.channel.webdav.ChapterDurationEnricher
+import io.github.hobin66.webdavplayer.channel.webdav.applyResolvedFileDurations
+import io.github.hobin66.webdavplayer.channel.webdav.hasResolvedDuration
+import io.github.hobin66.webdavplayer.channel.webdav.needsChapterDurationResolution
+import io.github.hobin66.webdavplayer.channel.webdav.resolveDirectQueueTotalPositionSeconds
 import io.github.hobin66.webdavplayer.content.WebdavMediaProvider
 import io.github.hobin66.webdavplayer.lib.domain.Bookmark
 import io.github.hobin66.webdavplayer.lib.domain.CurrentItemTimerOption
@@ -39,18 +45,26 @@ import io.github.hobin66.webdavplayer.playback.service.PlaybackService.Companion
 import io.github.hobin66.webdavplayer.playback.service.PlaybackService.Companion.TIMER_VALUE_EXTRA
 import io.github.hobin66.webdavplayer.playback.service.PlaybackEvent
 import io.github.hobin66.webdavplayer.playback.service.PlaybackEvents
+import io.github.hobin66.webdavplayer.playback.service.PlaybackSynchronizationService
 import io.github.hobin66.webdavplayer.playback.service.calculateChapterIndex
 import io.github.hobin66.webdavplayer.playback.service.calculateChapterIndexAndPosition
 import io.github.hobin66.webdavplayer.playback.service.calculateChapterPosition
+import io.github.hobin66.webdavplayer.playback.service.canRestoreFromOverallProgress
 import io.github.hobin66.webdavplayer.playback.service.resolvePlaybackSnapshotStart
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -63,8 +77,17 @@ class MediaRepository
     @param:ApplicationContext private val context: Context,
     private val preferences: WebdavPlayerPreferences,
     private val mediaChannel: WebdavMediaProvider,
+    private val chapterDurationEnricher: ChapterDurationEnricher,
+    private val playbackSynchronizationService: PlaybackSynchronizationService,
   ) {
     private lateinit var mediaController: MediaController
+
+    private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val durationWorkLock = Any()
+    private val durationPersistenceJobs = mutableSetOf<Job>()
+    @Volatile
+    private var durationWorkGeneration = 0L
+    private var durationEnrichmentJob: Job? = null
 
     private val token =
       SessionToken(
@@ -152,7 +175,7 @@ class MediaRepository
         object : FutureCallback<MediaController> {
           override fun onSuccess(controller: MediaController) {
             mediaController = controller
-            CoroutineScope(Dispatchers.Main.immediate).launch {
+            repositoryScope.launch {
               PlaybackEvents.events.collectLatest { event ->
                 when (event) {
                   PlaybackEvent.PlaybackReady -> handlePlaybackReady()
@@ -180,6 +203,7 @@ class MediaRepository
                     updateTimer(timerOption = null)
                     pause()
                   }
+                  maybeResolveChapterDurationFromPlayer()
                 }
 
                 override fun onPositionDiscontinuity(
@@ -215,7 +239,7 @@ class MediaRepository
     private fun handlePlaybackReady() {
       val book = preferences.getPlayingItem() ?: return
 
-      CoroutineScope(Dispatchers.Main).launch {
+      repositoryScope.launch {
         updateProgress(book)
         updateProgressLoop(mediaController.isPlaying)
         _isPlaybackReady.postValue(true)
@@ -309,13 +333,15 @@ class MediaRepository
     }
 
     fun clearPlayingBook() {
+      cancelChapterDurationWork()
+      playbackSynchronizationService.cancelSynchronization()
+      val clearingBookId = (_playingBook.value ?: preferences.getPlayingItem())?.id
+      preferences.clearPlayingItem()
       timerOption.value?.let { updateTimer(timerOption = null) }
       _playAfterPrepare.postValue(false)
       pause()
 
-      (_playingBook.value ?: preferences.getPlayingItem())
-        ?.id
-        ?.let(BookSkipSettingsStore::remove)
+      clearingBookId?.let(BookSkipSettingsStore::remove)
 
       _isPlaybackReady.postValue(false)
       _mediaPreparingError.postValue(false)
@@ -327,8 +353,7 @@ class MediaRepository
       _currentChapterPosition.postValue(0.0)
       _currentChapterDuration.postValue(0.0)
       _bookmarks.postValue(emptyList())
-      _playingBook.postValue(null)
-      preferences.clearPlayingItem()
+      postIfChanged(_playingBook, null)
     }
 
     fun setTotalPosition(totalPosition: Double) {
@@ -454,6 +479,7 @@ class MediaRepository
     }
 
     suspend fun refreshCurrentBook(bookId: String): OperationResult<Unit> {
+      cancelChapterDurationWorkAndJoin()
       _playAfterPrepare.postValue(false)
       pause()
       clearPreparedItem()
@@ -477,6 +503,7 @@ class MediaRepository
             .foldAsync(
               onSuccess = {
                 startPreparingPlayback(it, forceReload)
+                scheduleChapterDurationEnrichment(it)
                 OperationResult.Success(Unit)
               },
               onFailure = {
@@ -560,6 +587,7 @@ class MediaRepository
     }
 
     fun clearPreparedItem() {
+      cancelChapterDurationWork()
       timerOption
         .value
         ?.let { updateTimer(timerOption = null) }
@@ -573,6 +601,7 @@ class MediaRepository
       forceReload: Boolean,
     ) {
       if (shouldPreparePlaybackBook(_playingBook.value, book, forceReload = forceReload)) {
+        cancelChapterDurationWork()
         _totalPosition.postValue(0.0)
         _isPlaying.postValue(false)
 
@@ -662,6 +691,22 @@ class MediaRepository
     }
 
     private fun resolveCurrentTotalPositionSeconds(detailedItem: DetailedItem): Double? {
+      if (!::mediaController.isInitialized) {
+        return null
+      }
+
+      val currentIndex = mediaController.currentMediaItemIndex
+      val currentPositionSeconds = mediaController.currentPosition.coerceAtLeast(0L) / 1000.0
+
+      // Prefer live book chapter durations over MediaItem CHAPTER_START_MS placeholders.
+      if (usesDirectFileQueue(detailedItem) && currentIndex >= 0) {
+        return resolveDirectQueueTotalPositionSeconds(
+          chapters = detailedItem.chapters,
+          currentIndex = currentIndex,
+          currentPositionSeconds = currentPositionSeconds,
+        )
+      }
+
       val currentTotalPosition =
         resolveTotalPositionSeconds(
           chapterStartOffsetMs =
@@ -675,7 +720,6 @@ class MediaRepository
 
       return currentTotalPosition
         ?: run {
-          val currentIndex = mediaController.currentMediaItemIndex
           if (currentIndex < 0) {
             return null
           }
@@ -683,10 +727,9 @@ class MediaRepository
           val accumulated =
             detailedItem.chapters
               .take(currentIndex)
-              .sumOf { duration -> duration.duration.takeIf { it > 0.0 } ?: 0.0 }
-          val currentFilePosition = mediaController.currentPosition / 1000.0
+              .sumOf { chapter -> chapter.duration.takeIf { it > 0.0 } ?: 0.0 }
 
-          accumulated + currentFilePosition
+          accumulated + currentPositionSeconds
         }
     }
 
@@ -774,9 +817,14 @@ class MediaRepository
       book: DetailedItem,
       totalPosition: Double,
     ) {
+      val resolvedPrefix = book.chapters.takeWhile { chapter -> hasResolvedDuration(chapter.duration) }
+      if (resolvedPrefix.isEmpty()) {
+        return
+      }
+
       resolveDirectQueueTotalPositionSeekTarget(
-        chapterStartsSeconds = book.chapters.map { it.start },
-        chapterEndsSeconds = book.chapters.map { it.end },
+        chapterStartsSeconds = resolvedPrefix.map { it.start },
+        chapterEndsSeconds = resolvedPrefix.map { it.end },
         totalPositionSeconds = totalPosition,
       )?.let(::seekToDirectQueueTarget)
     }
@@ -907,6 +955,281 @@ class MediaRepository
       postIfChanged(_currentChapterIndex, trackIndex)
       postIfChanged(_currentChapterPosition, trackPosition)
       postIfChanged(_currentChapterDuration, nextDuration)
+      maybeResolveChapterDurationFromPlayer()
+    }
+
+    private fun maybeResolveChapterDurationFromPlayer() {
+      if (!::mediaController.isInitialized) {
+        return
+      }
+
+      val book = preferences.getPlayingItem() ?: _playingBook.value ?: return
+      if (!usesDirectFileQueue(book)) {
+        return
+      }
+
+      val index = mediaController.currentMediaItemIndex
+      if (index < 0 || index >= book.chapters.size) {
+        return
+      }
+
+      val durationMs = mediaController.duration
+      if (durationMs <= 0L || durationMs == C.TIME_UNSET) {
+        return
+      }
+
+      val durationSeconds = durationMs / 1000.0
+      val chapter = book.chapters[index]
+      if (hasResolvedDuration(chapter.duration)) {
+        return
+      }
+
+      val enriched =
+        applyResolvedFileDurations(
+          item = book,
+          durationsByFileId = mapOf(chapter.id to durationSeconds),
+        )
+      if (enriched == book) {
+        return
+      }
+
+      val generation = durationWorkGeneration
+      val merged =
+        applyEnrichedPlayingBook(
+          enriched,
+          currentChapterDurationSeconds = durationSeconds,
+          expectedGeneration = generation,
+        ) ?: return
+
+      launchDurationPersistence(generation) {
+        try {
+          chapterDurationEnricher.applyKnownDurations(
+            item = merged,
+            durationsByFileId = mapOf(chapter.id to durationSeconds),
+          )
+        } catch (error: CancellationException) {
+          throw error
+        } catch (error: Exception) {
+          Timber.w(error, "Unable to persist player-resolved duration for bookId=%s", merged.id)
+        }
+      }
+    }
+
+    private fun scheduleChapterDurationEnrichment(book: DetailedItem) {
+      val generation = beginChapterDurationWork()
+      if (!needsChapterDurationResolution(book)) {
+        return
+      }
+
+      val preferredFileIds = resolvePreferredDurationFileIds(book)
+
+      val job =
+        repositoryScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+          if (!isCurrentDurationGeneration(generation)) {
+            return@launch
+          }
+          val latest =
+            preferences.getPlayingItem()?.takeIf { it.id == book.id }
+              ?: _playingBook.value?.takeIf { it.id == book.id }
+              ?: return@launch
+          if (!needsChapterDurationResolution(latest)) {
+            return@launch
+          }
+
+          try {
+            // Priority neighborhood first (does not block preparePlayback).
+            val afterPriority =
+              chapterDurationEnricher.enrich(
+                item = latest,
+                preferredFileIds = preferredFileIds,
+                maxFiles = ChapterDurationEnricher.PRIORITY_PROBE_MAX_FILES,
+                onPartial = { partial ->
+                  withContext(Dispatchers.Main.immediate) {
+                    applyEnrichedPlayingBook(partial, expectedGeneration = generation)
+                  }
+                },
+              )
+
+            if (!needsChapterDurationResolution(afterPriority)) {
+              return@launch
+            }
+            if (!isCurrentDurationGeneration(generation)) {
+              return@launch
+            }
+
+            // Remaining chapters in the background after priority probes.
+            chapterDurationEnricher.enrich(
+              item = afterPriority,
+              preferredFileIds = emptyList(),
+              onPartial = { partial ->
+                withContext(Dispatchers.Main.immediate) {
+                  applyEnrichedPlayingBook(partial, expectedGeneration = generation)
+                }
+              },
+            )
+          } catch (error: CancellationException) {
+            throw error
+          } catch (error: Exception) {
+            Timber.w(error, "Background chapter duration enrichment failed for bookId=%s", book.id)
+          }
+        }
+      registerDurationEnrichmentJob(generation, job)
+    }
+
+    suspend fun cancelChapterDurationWorkAndJoin() {
+      val jobs = cancelChapterDurationWork()
+      val completed = withTimeoutOrNull(DURATION_WORK_CANCEL_TIMEOUT_MS) { jobs.joinAll() } != null
+      if (!completed && jobs.any { !it.isCompleted }) {
+        Timber.w("Timed out waiting for chapter duration work to cancel")
+      }
+    }
+
+    private fun beginChapterDurationWork(): Long {
+      cancelChapterDurationWork()
+      return durationWorkGeneration
+    }
+
+    private fun cancelChapterDurationWork(): List<Job> {
+      val jobs =
+        synchronized(durationWorkLock) {
+          durationWorkGeneration = if (durationWorkGeneration == Long.MAX_VALUE) 0L else durationWorkGeneration + 1L
+          buildList {
+            durationEnrichmentJob?.let(::add)
+            addAll(durationPersistenceJobs)
+          }.also {
+            durationEnrichmentJob = null
+            durationPersistenceJobs.clear()
+          }
+        }
+      jobs.forEach(Job::cancel)
+      return jobs
+    }
+
+    private fun registerDurationEnrichmentJob(
+      generation: Long,
+      job: Job,
+    ) {
+      val registered =
+        synchronized(durationWorkLock) {
+          if (generation == durationWorkGeneration) {
+            durationEnrichmentJob = job
+            true
+          } else {
+            false
+          }
+        }
+      if (!registered) {
+        job.cancel()
+        return
+      }
+      job.invokeOnCompletion {
+        synchronized(durationWorkLock) {
+          if (durationEnrichmentJob === job) {
+            durationEnrichmentJob = null
+          }
+        }
+      }
+      job.start()
+    }
+
+    private fun launchDurationPersistence(
+      generation: Long,
+      block: suspend () -> Unit,
+    ) {
+      val job =
+        repositoryScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+          if (isCurrentDurationGeneration(generation)) {
+            block()
+          }
+        }
+      val registered =
+        synchronized(durationWorkLock) {
+          if (generation == durationWorkGeneration) {
+            durationPersistenceJobs += job
+            true
+          } else {
+            false
+          }
+        }
+      if (!registered) {
+        job.cancel()
+        return
+      }
+      job.invokeOnCompletion {
+        synchronized(durationWorkLock) { durationPersistenceJobs -= job }
+      }
+      job.start()
+    }
+
+    private fun isCurrentDurationGeneration(generation: Long): Boolean = generation == durationWorkGeneration
+
+    private fun resolvePreferredDurationFileIds(book: DetailedItem): List<String> {
+      val snapshotStart =
+        resolvePlaybackSnapshotStart(
+          chapters = book.chapters,
+          snapshot = preferences.getPlaybackSnapshot(book.id),
+        )
+      val focusIndex =
+        snapshotStart?.chapterIndex
+          ?: book.progress
+            ?.currentTime
+            ?.takeIf { book.canRestoreFromOverallProgress() }
+            ?.let { progress ->
+              book.chapters
+                .indexOfFirst { chapter -> chapter.start <= progress && progress < chapter.end }
+                .takeIf { it >= 0 }
+            }
+          ?: 0
+
+      val neighborIndexes =
+        listOf(focusIndex, focusIndex - 1, focusIndex + 1)
+          .filter { it in book.chapters.indices }
+
+      return neighborIndexes.map { book.chapters[it].id }
+    }
+
+    private fun applyEnrichedPlayingBook(
+      enriched: DetailedItem,
+      currentChapterDurationSeconds: Double? = null,
+      expectedGeneration: Long? = null,
+    ): DetailedItem? {
+      if (expectedGeneration != null && !isCurrentDurationGeneration(expectedGeneration)) {
+        return null
+      }
+
+      val current = preferences.getPlayingItem()?.takeIf { it.id == enriched.id } ?: return null
+
+      val merged =
+        if (current == enriched) {
+          enriched
+        } else {
+          val durationsByFileId =
+            buildMap {
+              current.files.forEach { file ->
+                if (hasResolvedDuration(file.duration)) {
+                  put(file.id, file.duration)
+                }
+              }
+              enriched.files.forEach { file ->
+                if (hasResolvedDuration(file.duration)) {
+                  put(file.id, file.duration)
+                }
+              }
+            }
+          applyResolvedFileDurations(current, durationsByFileId)
+        }
+
+      if (current == merged) {
+        currentChapterDurationSeconds?.let { postIfChanged(_currentChapterDuration, it) }
+        return current
+      }
+
+      postIfChanged(_playingBook, merged)
+      preferences.savePlayingItem(merged)
+      playbackSynchronizationService.updatePlaybackSynchronizationItem(merged)
+      currentChapterDurationSeconds?.let { postIfChanged(_currentChapterDuration, it) }
+      updateCurrentTrackData()
+      return merged
     }
 
     private fun usesDirectFileQueue(book: DetailedItem): Boolean =
@@ -1023,6 +1346,7 @@ class MediaRepository
 
     private companion object {
       private const val CURRENT_TRACK_REPLAY_THRESHOLD = 5
+      private const val DURATION_WORK_CANCEL_TIMEOUT_MS = 1_500L
 
       private fun getSeekTime(option: SeekTimeOption?): Long =
         when (option) {
@@ -1060,7 +1384,11 @@ class MediaRepository
       value: T,
     ) {
       if (liveData.value != value) {
-        liveData.postValue(value)
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+          liveData.value = value
+        } else {
+          liveData.postValue(value)
+        }
       }
     }
   }
